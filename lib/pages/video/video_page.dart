@@ -9,6 +9,8 @@ import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/pages/player/player_item.dart';
+import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
+import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
@@ -90,7 +92,8 @@ class _VideoPageState extends State<VideoPage>
     windowManager.addListener(this);
     // Window fullscreen can be changed outside this page through system chrome.
     videoPageController.isDesktopFullscreen();
-    tabController = TabController(length: 2, vsync: this);
+    tabController = TabController(length: 3, vsync: this);
+    tabController.addListener(handleTabChanged);
     observerController = GridObserverController(controller: scrollController);
     animation = AnimationController(
       duration: _sideTabAnimationDuration,
@@ -116,7 +119,10 @@ class _VideoPageState extends State<VideoPage>
         GStorage.getSetting(SettingsKeys.playerDisableAnimations);
     _pipModeListener = mobx.reaction<bool>(
       (_) => videoPageController.isPip,
-      (_) => _syncFullscreenWithWindowShape(),
+      (_) {
+        _syncFullscreenWithWindowShape();
+        syncChatVisibility();
+      },
     );
   }
 
@@ -165,7 +171,8 @@ class _VideoPageState extends State<VideoPage>
           playerController.syncplay.syncplayController?.username ?? '';
       final String displayText = '${event.username}：${event.message}';
 
-      if (playerController.danmaku.danmakuOn &&
+      if (playerController.syncplay.chatDanmakuEnabled &&
+          playerController.danmaku.danmakuOn &&
           event.username != localUsername &&
           event.fromRemote) {
         playerController.danmaku.canvasController.addDanmaku(
@@ -265,6 +272,8 @@ class _VideoPageState extends State<VideoPage>
       _logSubscription?.cancel();
     } catch (_) {}
     _pipModeListener();
+    tabController.removeListener(handleTabChanged);
+    playerController.syncplay.setChatVisible(false);
     // Cancellation and log-stream teardown happen in VideoPageController's
     // own dispose when Modular releases the route scope.
     if (!isDesktop()) {
@@ -283,11 +292,58 @@ class _VideoPageState extends State<VideoPage>
   void onWindowEnterFullScreen() {
     _hideTabBodyImmediately();
     videoPageController.handleOnEnterFullScreen();
+    syncChatVisibility();
   }
 
   @override
   void onWindowLeaveFullScreen() {
     videoPageController.handleOnExitFullScreen();
+    syncChatVisibility();
+  }
+
+  void openSyncPlayChat() {
+    if (videoPageController.isPip) {
+      return;
+    }
+    if (playerController.syncplay.syncplayRoom.isEmpty) {
+      showSyncPlaySheet(
+        context,
+        playerController: playerController,
+        changeEpisode: changeEpisode,
+      );
+      return;
+    }
+    if (tabController.index != 2) {
+      tabController.animateTo(2);
+    }
+    if (_isSideTabLayout && !_tabBodyTargetVisible) {
+      _openTabBodyAnimated();
+    } else {
+      syncChatVisibility();
+    }
+  }
+
+  void syncChatVisibility() {
+    if (!mounted) {
+      return;
+    }
+    final bool chatTabVisible = tabController.index == 2;
+    final bool contentVisible = _isSideTabLayout
+        ? videoPageController.showTabBody && _tabBodyTargetVisible
+        : videoPageController.showTabBody && !videoPageController.isFullscreen;
+    playerController.syncplay.setChatVisible(
+      chatTabVisible && contentVisible && !videoPageController.isPip,
+    );
+  }
+
+  void handleTabChanged() {
+    if (!mounted) {
+      return;
+    }
+    if (tabController.index == 0) {
+      menuJumpToCurrentEpisode();
+    }
+    syncChatVisibility();
   }
 
   void showDebugConsole() {
@@ -389,11 +445,13 @@ class _VideoPageState extends State<VideoPage>
       } else {
         animation.value = 1.0;
       }
+      syncChatVisibility();
       return;
     }
 
     if (!videoPageController.showTabBody) {
       animation.value = 0.0;
+      syncChatVisibility();
       return;
     }
 
@@ -404,12 +462,14 @@ class _VideoPageState extends State<VideoPage>
         }
         videoPageController.showTabBody = false;
         animation.value = 0.0;
+        syncChatVisibility();
       });
       return;
     }
 
     videoPageController.showTabBody = false;
     animation.value = 0.0;
+    syncChatVisibility();
   }
 
   void _syncTabBodyAnimationAfterLayout() {
@@ -862,6 +922,7 @@ class _VideoPageState extends State<VideoPage>
                   onBackPressed: onBackPressed,
                   keyboardFocus: keyboardFocus,
                   sendDanmaku: sendDanmaku,
+                  openSyncPlayChat: openSyncPlayChat,
                   disableAnimations: disableAnimations,
                   showDanmakuDestinationPickerAndSend:
                       showDanmakuDestinationPickerAndSend,
@@ -1112,11 +1173,13 @@ class _VideoPageState extends State<VideoPage>
   Widget get tabBody {
     final bool danmakuOn = playerController.danmaku.danmakuOn;
     final int episodeNum = videoPageController.commentsEpisode;
+    final bool compactTabs =
+        MediaQuery.sizeOf(context).width <= MediaQuery.sizeOf(context).height;
 
     return Container(
       color: Theme.of(context).canvasColor,
       child: DefaultTabController(
-        length: 2,
+        length: 3,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1127,8 +1190,10 @@ class _VideoPageState extends State<VideoPage>
                   dividerHeight: 0,
                   isScrollable: true,
                   tabAlignment: TabAlignment.start,
-                  labelPadding:
-                      const EdgeInsetsDirectional.only(start: 30, end: 30),
+                  labelPadding: EdgeInsetsDirectional.only(
+                    start: compactTabs ? 16 : 30,
+                    end: compactTabs ? 16 : 30,
+                  ),
                   onTap: (index) {
                     if (index == 0) {
                       menuJumpToCurrentEpisode();
@@ -1137,10 +1202,10 @@ class _VideoPageState extends State<VideoPage>
                   tabs: const [
                     Tab(text: '选集'),
                     Tab(text: '评论'),
+                    Tab(text: '聊天'),
                   ],
                 ),
-                if (MediaQuery.sizeOf(context).width <=
-                    MediaQuery.sizeOf(context).height) ...[
+                if (compactTabs) ...[
                   const Spacer(),
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -1228,6 +1293,11 @@ class _VideoPageState extends State<VideoPage>
                     episode: episodeNum,
                     selection: videoPageController.selectedEpisode,
                     videoPageController: videoPageController,
+                  ),
+                  SyncPlayChatPanel(
+                    controller: playerController.syncplay,
+                    onSend: playerController.trySendSyncPlayChatMessage,
+                    inviteText: playerController.syncPlayInviteText(),
                   ),
                 ],
               ),

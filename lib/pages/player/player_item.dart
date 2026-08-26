@@ -52,6 +52,7 @@ class PlayerItem extends StatefulWidget {
     required this.onBackPressed,
     required this.keyboardFocus,
     required this.sendDanmaku,
+    required this.openSyncPlayChat,
     required this.showDanmakuDestinationPickerAndSend,
     required this.pauseForTimedShutdown,
     this.disableAnimations = false,
@@ -69,6 +70,7 @@ class PlayerItem extends StatefulWidget {
   final FocusNode keyboardFocus;
   final bool disableAnimations;
   final Future<bool> Function(String) showDanmakuDestinationPickerAndSend;
+  final VoidCallback openSyncPlayChat;
   final VoidCallback pauseForTimedShutdown;
 
   @override
@@ -1660,6 +1662,7 @@ class _PlayerItemState extends State<PlayerItem>
                                     _panelVisibilityController,
                                 keyboardFocus: widget.keyboardFocus,
                                 sendDanmaku: widget.sendDanmaku,
+                                openSyncPlayChat: widget.openSyncPlayChat,
                                 acquirePlayerPanelHold: acquirePlayerPanelHold,
                                 onMenuVisibilityChanged:
                                     _handlePlayerMenuVisibilityChanged,
@@ -1696,6 +1699,7 @@ class _PlayerItemState extends State<PlayerItem>
                                 handleDanmaku: handleDanmaku,
                                 showVideoInfo: showVideoInfo,
                                 showSyncPlayPanel: showSyncPlayPanel,
+                                openSyncPlayChat: widget.openSyncPlayChat,
                                 pauseForTimedShutdown:
                                     widget.pauseForTimedShutdown,
                                 disableAnimations: widget.disableAnimations,

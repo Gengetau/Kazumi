@@ -373,7 +373,13 @@ class _SyncPlayHomeSheet extends StatelessWidget {
         _RoomNumberCard(
           room: room,
           label: '当前房间',
-          trailing: [_CopyButton(value: room)],
+          trailing: [
+            _CopyButton(value: room),
+            _CopyButton(
+              value: playerController.syncPlayInviteText(),
+              tooltip: '复制邀请',
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         Material(
@@ -916,9 +922,10 @@ class _RoomNumberCard extends StatelessWidget {
 /// Confirms inline by swapping to a checkmark: a SnackBar raised from inside a
 /// modal sheet lands on the page's Scaffold underneath and stays hidden.
 class _CopyButton extends StatefulWidget {
-  const _CopyButton({required this.value});
+  const _CopyButton({required this.value, this.tooltip = '复制'});
 
   final String value;
+  final String tooltip;
 
   @override
   State<_CopyButton> createState() => _CopyButtonState();
@@ -949,7 +956,7 @@ class _CopyButtonState extends State<_CopyButton> {
   Widget build(BuildContext context) {
     return IconButton(
       onPressed: _copy,
-      tooltip: _copied ? '已复制' : '复制',
+      tooltip: _copied ? '已复制' : widget.tooltip,
       color: Theme.of(context).colorScheme.onPrimaryContainer,
       icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded),
     );

@@ -19,6 +19,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/services/player/audio_controller.dart';
+import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -34,6 +35,7 @@ class PlayerController implements Disposable {
       isLocalPlayback: () => isLocalPlayback,
       downloadController: downloadController,
     );
+    syncplay.loadChatDanmakuSetting();
   }
 
   final ShaderAssetService shaderAssetService;
@@ -80,6 +82,7 @@ class PlayerController implements Disposable {
   late int currentDanmakuEpisodeNumber;
   late int currentRoad;
   late String referer;
+  String currentBangumiName = '';
   String? coverUrl;
   String videoUrl = '';
   bool isLocalPlayback = false;
@@ -174,6 +177,7 @@ class PlayerController implements Disposable {
     currentDanmakuEpisodeNumber = params.danmakuEpisodeNumber;
     currentRoad = params.currentRoad;
     referer = params.referer;
+    currentBangumiName = params.bangumiName ?? '';
 
     KazumiLogger().i(
         'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
@@ -459,11 +463,13 @@ class PlayerController implements Disposable {
       String room,
       String username,
       Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode) async {
+          changeEpisode,
+      {bool preserveChatHistory = false}) async {
     await syncplay.createRoom(
       room,
       username,
       changeEpisode,
+      preserveChatHistory: preserveChatHistory,
     );
   }
 
@@ -487,8 +493,38 @@ class PlayerController implements Disposable {
     await syncplay.requestSync(doSeek: doSeek);
   }
 
+  Future<bool> trySendSyncPlayChatMessage(String message) {
+    return syncplay.trySendChatMessage(message);
+  }
+
   Future<void> sendSyncPlayChatMessage(String message) async {
-    await syncplay.sendChatMessage(message);
+    await trySendSyncPlayChatMessage(message);
+  }
+
+  String syncPlayInviteText() {
+    String endpoint = '';
+    try {
+      endpoint = GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
+    } catch (_) {}
+    if (endpoint.isEmpty) {
+      endpoint = defaultSyncPlayEndPoint;
+    }
+
+    final title = currentBangumiName.isNotEmpty ? currentBangumiName : '未知作品';
+    var episode = 0;
+    try {
+      episode = currentEpisode;
+    } catch (_) {}
+    final room = syncplay.syncplayRoom.isNotEmpty
+        ? syncplay.syncplayRoom
+        : syncplay.activeChatRoom;
+    return '''Kazumi 一起看邀请
+番剧：$title
+剧集：第 $episode 集
+房间：$room
+服务器：$endpoint
+
+打开 Kazumi → 播放对应剧集 → 一起看 → 加入房间''';
   }
 
   Future<void> exitSyncPlayRoom() async {

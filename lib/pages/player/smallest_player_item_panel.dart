@@ -42,6 +42,7 @@ class SmallestPlayerItemPanel extends StatefulWidget {
     required this.skipOP,
     required this.showVideoInfo,
     required this.showSyncPlayPanel,
+    required this.openSyncPlayChat,
     required this.pauseForTimedShutdown,
     this.disableAnimations = false,
   });
@@ -64,6 +65,7 @@ class SmallestPlayerItemPanel extends StatefulWidget {
   final ValueChanged<bool> onMenuVisibilityChanged;
   final void Function() showVideoInfo;
   final void Function() showSyncPlayPanel;
+  final VoidCallback openSyncPlayChat;
   final VoidCallback pauseForTimedShutdown;
   final bool disableAnimations;
 
@@ -640,6 +642,31 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text("一起看"),
+                  ),
+                ),
+              ),
+              MenuItemButton(
+                onPressed: widget.openSyncPlayChat,
+                child: Container(
+                  height: 48,
+                  constraints: const BoxConstraints(minWidth: 112),
+                  alignment: Alignment.centerLeft,
+                  child: Observer(
+                    builder: (context) {
+                      final unread = playerController.syncplay.unreadChatCount;
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('聊天室'),
+                          if (unread > 0) ...[
+                            const SizedBox(width: 8),
+                            Badge(
+                              label: Text(unread > 99 ? '99+' : '$unread'),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),

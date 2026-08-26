@@ -54,31 +54,142 @@ abstract class _PlayerSyncPlayController with Store {
 
   bool get hasSession => syncplayController != null;
 
+  final ObservableList<SyncPlayChatMessage> chatMessages =
+      ObservableList<SyncPlayChatMessage>();
+
+  @observable
+  int unreadChatCount = 0;
+
+  @observable
+  bool chatVisible = false;
+
+  @observable
+  bool chatDanmakuEnabled = true;
+
+  String _activeChatRoom = '';
+  int _nextChatMessageId = 1;
+
+  static const int maxChatMessages = 300;
+  static const int maxChatMessageLength = 500;
+
+  int get chatMessageLengthLimit => maxChatMessageLength;
+
+  String get activeChatRoom => _activeChatRoom;
+
   final StreamController<SyncPlayChatMessage> _chatStreamController =
       StreamController<SyncPlayChatMessage>.broadcast();
 
   Stream<SyncPlayChatMessage> get chatStream => _chatStreamController.stream;
 
+  void beginChatSession(String room, {bool preserveHistory = false}) {
+    final shouldClear = !preserveHistory ||
+        (_activeChatRoom.isNotEmpty && _activeChatRoom != room);
+    if (shouldClear) {
+      clearChatSession();
+    }
+    _activeChatRoom = room;
+  }
+
+  void appendUserMessage({
+    required String username,
+    required String message,
+    bool fromRemote = false,
+    DateTime? time,
+  }) {
+    emitChatMessage(
+      username: username,
+      message: message,
+      fromRemote: fromRemote,
+      time: time,
+    );
+  }
+
+  void appendSystemMessage(String message, {String username = '系统'}) {
+    emitChatMessage(
+      username: username,
+      message: message,
+      fromRemote: true,
+      type: SyncPlayChatMessageType.system,
+    );
+  }
+
   void emitChatMessage({
     required String username,
     required String message,
     required bool fromRemote,
+    SyncPlayChatMessageType type = SyncPlayChatMessageType.user,
+    DateTime? time,
   }) {
     if (_chatStreamController.isClosed) {
       return;
     }
-    _chatStreamController.add(SyncPlayChatMessage(
+
+    final chatMessage = SyncPlayChatMessage(
+      id: _nextChatMessageId++,
       username: username,
       message: message,
       fromRemote: fromRemote,
-    ));
+      time: time ?? DateTime.now(),
+      type: type,
+    );
+    chatMessages.add(chatMessage);
+    while (chatMessages.length > maxChatMessages) {
+      chatMessages.removeAt(0);
+    }
+    if (type == SyncPlayChatMessageType.user && fromRemote && !chatVisible) {
+      unreadChatCount++;
+    }
+    if (type == SyncPlayChatMessageType.user) {
+      _chatStreamController.add(chatMessage);
+    }
+  }
+
+  void setChatVisible(bool visible) {
+    chatVisible = visible;
+    if (visible) {
+      markChatRead();
+    }
+  }
+
+  void markChatRead() {
+    unreadChatCount = 0;
+  }
+
+  void clearChatSession() {
+    chatMessages.clear();
+    unreadChatCount = 0;
+    _activeChatRoom = '';
+  }
+
+  void setChatDanmakuEnabled(bool enabled) {
+    chatDanmakuEnabled = enabled;
+    try {
+      unawaited(
+        GStorage.putSetting<bool>(
+          SettingsKeys.syncPlayChatDanmakuEnabled,
+          enabled,
+        ).catchError((_) {}),
+      );
+    } catch (_) {
+      // Isolated state tests do not initialize Hive.
+    }
+  }
+
+  void loadChatDanmakuSetting() {
+    try {
+      chatDanmakuEnabled =
+          GStorage.getSetting<bool>(SettingsKeys.syncPlayChatDanmakuEnabled);
+    } catch (_) {
+      // The player may be constructed before storage has been initialized.
+    }
   }
 
   Future<void> createRoom(
       String room,
       String username,
       Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode) async {
+          changeEpisode,
+      {bool preserveChatHistory = false}) async {
     if (_connectionSessions.isClosed) {
       return;
     }
@@ -87,6 +198,10 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
+    beginChatSession(room, preserveHistory: preserveChatHistory);
+    if (preserveChatHistory) {
+      appendSystemMessage('正在重新连接');
+    }
     await previousClient?.disconnect();
     if (session.isStale) {
       return;
@@ -122,13 +237,21 @@ abstract class _PlayerSyncPlayController with Store {
               error is SyncplayException ? error.message : error.toString();
           KazumiLogger().e('SyncPlay: error $message', error: error);
           if (error is SyncplayConnectionException) {
-            exitRoom();
+            unawaited(_disconnect(
+              clearChatSession: false,
+              systemMessage: '连接已中断',
+            ));
             KazumiDialog.showToast(
               message: 'SyncPlay: 同步中断 $message',
               duration: const Duration(seconds: 5),
               showActionButton: true,
               actionLabel: '重新连接',
-              onActionPressed: () => createRoom(room, username, changeEpisode),
+              onActionPressed: () => createRoom(
+                room,
+                username,
+                changeEpisode,
+                preserveChatHistory: true,
+              ),
             );
           }
         },
@@ -151,11 +274,13 @@ abstract class _PlayerSyncPlayController with Store {
             }
           }
           if (message['type'] == 'left') {
+            appendSystemMessage('${message['username']} 离开了房间');
             KazumiDialog.showToast(
                 message: 'SyncPlay: ${message['username']} 离开了房间',
                 duration: const Duration(seconds: 5));
           }
           if (message['type'] == 'joined') {
+            appendSystemMessage('${message['username']} 加入了房间');
             KazumiDialog.showToast(
                 message: 'SyncPlay: ${message['username']} 加入了房间',
                 duration: const Duration(seconds: 5));
@@ -255,16 +380,20 @@ abstract class _PlayerSyncPlayController with Store {
         return;
       }
       syncplayRoom = room;
+      if (preserveChatHistory) {
+        appendSystemMessage('已重新连接');
+      }
     } catch (e) {
       KazumiLogger().e('SyncPlay: error', error: e);
       if (!_isCurrentConnection(session, client)) {
         await client.disconnect();
         return;
       }
-      syncplayController = null;
-      syncplayRoom = '';
-      syncplayClientRtt = 0;
-      await client.disconnect();
+      await _disconnect(
+        clearChatSession: false,
+        client: client,
+        systemMessage: '连接已中断',
+      );
       final message = e is SyncplayException ? e.message : e.toString();
       KazumiDialog.showToast(
         message: 'SyncPlay: 连接失败 $message',
@@ -319,12 +448,32 @@ abstract class _PlayerSyncPlayController with Store {
         () => client.sendSyncPlaySyncRequest(doSeek: doSeek));
   }
 
-  Future<void> sendChatMessage(String message) async {
-    final client = syncplayController;
-    if (client == null) {
-      return;
+  Future<bool> trySendChatMessage(String rawMessage) async {
+    final message = rawMessage.trim();
+    if (message.isEmpty || message.length > maxChatMessageLength) {
+      return false;
     }
-    await _runBestEffortSync(() => client.sendChatMessage(message));
+    final client = syncplayController;
+    if (client == null || syncplayRoom.isEmpty || !client.isConnected) {
+      return false;
+    }
+    try {
+      await client.sendChatMessage(message);
+      return true;
+    } on SyncplayConnectionException {
+      return false;
+    } catch (error, stackTrace) {
+      KazumiLogger().w(
+        'SyncPlay: failed to send chat message',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return false;
+    }
+  }
+
+  Future<void> sendChatMessage(String message) async {
+    await trySendChatMessage(message);
   }
 
   Future<void> _runBestEffortSync(Future<void> Function() operation) async {
@@ -337,20 +486,33 @@ abstract class _PlayerSyncPlayController with Store {
 
   @action
   Future<void> exitRoom() async {
+    await _disconnect(clearChatSession: true);
+  }
+
+  Future<void> _disconnect({
+    required bool clearChatSession,
+    SyncplayClient? client,
+    String? systemMessage,
+  }) async {
     _connectionSessions.cancel();
-    final controller = syncplayController;
-    syncplayController = null;
-    syncplayRoom = '';
-    syncplayClientRtt = 0;
-    if (controller == null) {
-      return;
+    final controller = client ?? syncplayController;
+    if (client == null || identical(syncplayController, client)) {
+      syncplayController = null;
+      syncplayRoom = '';
+      syncplayClientRtt = 0;
     }
-    await controller.disconnect();
+    if (clearChatSession) {
+      this.clearChatSession();
+    } else if (systemMessage != null) {
+      appendSystemMessage(systemMessage);
+    }
+    await controller?.disconnect();
   }
 
   Future<void> dispose() async {
     _connectionSessions.close();
     await exitRoom();
+    chatMessages.clear();
     await _chatStreamController.close();
   }
 }
