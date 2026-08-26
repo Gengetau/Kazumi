@@ -57,6 +57,54 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     });
   }
 
+  late final _$unreadChatCountAtom =
+      Atom(name: '_PlayerSyncPlayController.unreadChatCount', context: context);
+
+  @override
+  int get unreadChatCount {
+    _$unreadChatCountAtom.reportRead();
+    return super.unreadChatCount;
+  }
+
+  @override
+  set unreadChatCount(int value) {
+    _$unreadChatCountAtom.reportWrite(value, super.unreadChatCount, () {
+      super.unreadChatCount = value;
+    });
+  }
+
+  late final _$chatVisibleAtom =
+      Atom(name: '_PlayerSyncPlayController.chatVisible', context: context);
+
+  @override
+  bool get chatVisible {
+    _$chatVisibleAtom.reportRead();
+    return super.chatVisible;
+  }
+
+  @override
+  set chatVisible(bool value) {
+    _$chatVisibleAtom.reportWrite(value, super.chatVisible, () {
+      super.chatVisible = value;
+    });
+  }
+
+  late final _$chatDanmakuEnabledAtom = Atom(
+      name: '_PlayerSyncPlayController.chatDanmakuEnabled', context: context);
+
+  @override
+  bool get chatDanmakuEnabled {
+    _$chatDanmakuEnabledAtom.reportRead();
+    return super.chatDanmakuEnabled;
+  }
+
+  @override
+  set chatDanmakuEnabled(bool value) {
+    _$chatDanmakuEnabledAtom.reportWrite(value, super.chatDanmakuEnabled, () {
+      super.chatDanmakuEnabled = value;
+    });
+  }
+
   late final _$exitRoomAsyncAction =
       AsyncAction('_PlayerSyncPlayController.exitRoom', context: context);
 
@@ -70,7 +118,10 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     return '''
 syncplayController: ${syncplayController},
 syncplayRoom: ${syncplayRoom},
-syncplayClientRtt: ${syncplayClientRtt}
+syncplayClientRtt: ${syncplayClientRtt},
+unreadChatCount: ${unreadChatCount},
+chatVisible: ${chatVisible},
+chatDanmakuEnabled: ${chatDanmakuEnabled}
     ''';
   }
 }

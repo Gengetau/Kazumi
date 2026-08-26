@@ -47,16 +47,27 @@ enum DanmakuDestination {
   remoteDanmaku,
 }
 
+enum SyncPlayChatMessageType {
+  user,
+  system,
+}
+
 class SyncPlayChatMessage {
+  /// A client-local identifier used for list keys and stable ordering.
+  /// SyncPlay does not carry a message id, so this value is never sent.
+  final int id;
   final String username;
   final String message;
   final bool fromRemote;
   final DateTime time;
+  final SyncPlayChatMessageType type;
 
-  SyncPlayChatMessage({
+  const SyncPlayChatMessage({
+    required this.id,
     required this.username,
     required this.message,
-    this.fromRemote = true,
-    DateTime? time,
-  }) : time = time ?? DateTime.now();
+    required this.fromRemote,
+    required this.time,
+    this.type = SyncPlayChatMessageType.user,
+  });
 }

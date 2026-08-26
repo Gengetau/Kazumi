@@ -338,6 +338,11 @@ class SettingsKeys {
     '',
     group: SettingGroup.player,
   );
+  static const syncPlayChatDanmakuEnabled = SettingKey<bool>(
+    'syncPlayChatDanmakuEnabled',
+    true,
+    group: SettingGroup.player,
+  );
   static const androidEnableOpenSLES = SettingKey<bool>(
     _SettingBoxKey.androidEnableOpenSLES,
     true,
@@ -581,6 +586,7 @@ class SettingsKeys {
     playerDebugMode,
     syncPlayEndPoint,
     syncPlayUserName,
+    syncPlayChatDanmakuEnabled,
     androidEnableOpenSLES,
     androidVideoRenderer,
     androidAutoEnterPIP,

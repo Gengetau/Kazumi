@@ -10,6 +10,7 @@ import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/pages/player/player_panel_hold.dart';
+import 'package:kazumi/pages/player/syncplay_chat_entry.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
@@ -45,6 +46,7 @@ class PlayerItemPanel extends StatefulWidget {
     required this.toggleMenu,
     required this.keyboardFocus,
     required this.sendDanmaku,
+    required this.openSyncPlayChat,
     required this.acquirePlayerPanelHold,
     required this.onMenuVisibilityChanged,
     required this.handleDanmaku,
@@ -78,6 +80,7 @@ class PlayerItemPanel extends StatefulWidget {
   final void Function(String direction) handlePreNextEpisode;
   final void Function() skipOP;
   final bool Function(String) sendDanmaku;
+  final VoidCallback openSyncPlayChat;
   final void Function() showVideoInfo;
   final void Function() showSyncPlayPanel;
   final Future<bool> Function(String) showDanmakuDestinationPickerAndSend;
@@ -1024,6 +1027,11 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                 acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
                 bangumiItem: videoPageController.bangumiItem,
               ),
+              if (isDesktop() || isTablet())
+                SyncPlayChatEntry(
+                  controller: playerController.syncplay,
+                  onPressed: widget.openSyncPlayChat,
+                ),
               PlayerPanelHoldMenuAnchor(
                 acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
                 onVisibilityChanged: widget.onMenuVisibilityChanged,
@@ -1200,6 +1208,32 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: Text("一起看"),
+                      ),
+                    ),
+                  ),
+                  MenuItemButton(
+                    onPressed: widget.openSyncPlayChat,
+                    child: Container(
+                      height: 48,
+                      constraints: const BoxConstraints(minWidth: 112),
+                      alignment: Alignment.centerLeft,
+                      child: Observer(
+                        builder: (context) {
+                          final unread =
+                              playerController.syncplay.unreadChatCount;
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text('聊天室'),
+                              if (unread > 0) ...[
+                                const SizedBox(width: 8),
+                                Badge(
+                                  label: Text(unread > 99 ? '99+' : '$unread'),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
                       ),
                     ),
                   ),
