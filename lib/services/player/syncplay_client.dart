@@ -6,6 +6,7 @@ import 'dart:io';
 
 const double _pingMovingAverageWeight = 0.85;
 const Duration _tlsHandshakeTimeout = Duration(seconds: 10);
+const Duration _helloTimeout = Duration(seconds: 10);
 const Duration _socketWriteTimeout = Duration(seconds: 10);
 
 class SyncplayException implements Exception {
@@ -22,6 +23,16 @@ class SyncplayConnectionException extends SyncplayException {
 
 class SyncplayProtocolException extends SyncplayException {
   SyncplayProtocolException(super.message);
+}
+
+/// The authoritative identity and room returned by SyncPlay's Hello reply.
+/// The requested username is only a hint; servers can rename it to avoid a
+/// collision, so callers must use this value for local-message comparisons.
+class SyncplayHello {
+  final String username;
+  final String room;
+
+  const SyncplayHello({required this.username, required this.room});
 }
 
 abstract class SyncplayMessage {
@@ -226,6 +237,7 @@ class SyncplayClient {
       StreamController.broadcast();
   StreamController<Map<String, dynamic>>? _positionChangedMessageController =
       StreamController.broadcast();
+  Completer<SyncplayHello>? _helloCompleter;
   double? _lastLatencyCalculation;
 
   // Network status
@@ -348,12 +360,34 @@ class SyncplayClient {
     await _sendMessage(_TLSMessage(message: 'send'));
   }
 
-  Future<void> joinRoom(String room, String username) async {
-    await _sendMessage(HelloMessage(
-      username: username,
-      version: '1.7.0',
-      room: room,
-    ));
+  /// Sends Hello and waits for the server's authoritative reply.
+  ///
+  /// Waiting here prevents callers from treating a socket that has merely
+  /// opened as a joined room, and gives them the username that the server
+  /// actually accepted.
+  Future<SyncplayHello> joinRoom(String room, String username) async {
+    if (_helloCompleter != null) {
+      throw StateError('SyncplayClient.joinRoom may only be called once');
+    }
+    final completer = Completer<SyncplayHello>();
+    _helloCompleter = completer;
+    try {
+      await _sendMessage(HelloMessage(
+        username: username,
+        version: '1.7.0',
+        room: room,
+      ));
+      return await completer.future.timeout(
+        _helloTimeout,
+        onTimeout: () => throw SyncplayConnectionException(
+          'SyncPlay: Hello response timed out',
+        ),
+      );
+    } finally {
+      if (identical(_helloCompleter, completer)) {
+        _helloCompleter = null;
+      }
+    }
   }
 
   Future<void> sendChatMessage(String message) async {
@@ -402,6 +436,11 @@ class SyncplayClient {
     _closed = true;
     final exception =
         SyncplayConnectionException('SyncPlay: connection closed');
+    final helloCompleter = _helloCompleter;
+    _helloCompleter = null;
+    if (helloCompleter != null && !helloCompleter.isCompleted) {
+      helloCompleter.completeError(exception, StackTrace.current);
+    }
     _completeTLSHandshakeError(exception);
     await _closeSockets(pendingWriteError: exception);
     await _generalMessageController?.close();
@@ -606,15 +645,33 @@ class SyncplayClient {
       return;
     }
     if (json.containsKey('Hello')) {
-      if (json['Hello'].containsKey('room') &&
-          json['Hello']['room'].containsKey('name')) {
-        _username = json['Hello']['username'];
-        _currentRoom = json['Hello']['room']['name'];
-        _runInBackground(_setReady());
+      final helloData = json['Hello'];
+      final roomData = helloData is Map ? helloData['room'] : null;
+      final username = helloData is Map
+          ? helloData['username']?.toString() ?? ''
+          : '';
+      final room = roomData is Map ? roomData['name']?.toString() ?? '' : '';
+      if (helloData is! Map || roomData is! Map || room.isEmpty) {
+        final exception = SyncplayProtocolException(
+          'SyncPlay: invalid Hello response',
+        );
+        _helloCompleter?.completeError(exception, StackTrace.current);
+        _helloCompleter = null;
+        _generalMessageController?.addError(exception, StackTrace.current);
+        return;
+      }
+      _username = username;
+      _currentRoom = room;
+      _runInBackground(_setReady());
+      final hello = SyncplayHello(username: username, room: room);
+      final helloCompleter = _helloCompleter;
+      _helloCompleter = null;
+      if (helloCompleter != null && !helloCompleter.isCompleted) {
+        helloCompleter.complete(hello);
       }
       _generalMessageController?.add({
-        'username': json['Hello']['username'],
-        'room': json['Hello']['room']['name'],
+        'username': username,
+        'room': room,
       });
       return;
     }

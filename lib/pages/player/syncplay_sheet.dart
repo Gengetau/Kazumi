@@ -209,10 +209,15 @@ class _SyncPlayHomeSheet extends StatelessWidget {
       final bool hasSession = playerController.syncplay.hasSession;
       final String room = playerController.syncplay.syncplayRoom;
       final int rtt = playerController.syncplay.syncplayClientRtt;
-      final bool connected = room.isNotEmpty;
+      final state = playerController.syncplay.connectionState;
+      final bool connected =
+          state == SyncPlayConnectionState.connected && room.isNotEmpty;
       // Connected socket, room not joined yet. The server picker must stay out
       // of reach, otherwise the saved address stops matching what we dialed.
-      final bool connecting = hasSession && !connected;
+      final bool connecting = state == SyncPlayConnectionState.connecting ||
+          state == SyncPlayConnectionState.reconnecting ||
+          (hasSession && !connected);
+      final bool failed = state == SyncPlayConnectionState.failed;
 
       return _SyncPlaySheetScaffold(
         title: '一起看',
@@ -235,7 +240,13 @@ class _SyncPlayHomeSheet extends StatelessWidget {
             return _buildConnected(context, room: room, rtt: rtt);
           }
           if (connecting) {
-            return _buildConnecting(context);
+            return _buildConnecting(
+              context,
+              reconnecting: state == SyncPlayConnectionState.reconnecting,
+            );
+          }
+          if (failed) {
+            return _buildFailed(context);
           }
           return _buildLobby(context, compact: compact);
         },
@@ -243,7 +254,10 @@ class _SyncPlayHomeSheet extends StatelessWidget {
     });
   }
 
-  Widget _buildConnecting(BuildContext context) {
+  Widget _buildConnecting(
+    BuildContext context, {
+    required bool reconnecting,
+  }) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme colorScheme = theme.colorScheme;
 
@@ -266,7 +280,7 @@ class _SyncPlayHomeSheet extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '正在连接',
+                    reconnecting ? '正在重新连接' : '正在连接',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: colorScheme.onSurface,
                       fontWeight: FontWeight.w600,
@@ -282,6 +296,36 @@ class _SyncPlayHomeSheet extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFailed(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colorScheme = theme.colorScheme;
+    return Material(
+      color: colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(materialBottomSheetRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_off_rounded, color: colorScheme.onErrorContainer),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                '连接失败，请检查服务器后重试',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            FilledButton.tonal(
+              onPressed: playerController.syncplay.retryConnection,
+              child: const Text('重试'),
             ),
           ],
         ),

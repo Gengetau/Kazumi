@@ -52,6 +52,10 @@ abstract class _PlayerSyncPlayController with Store {
   @observable
   int syncplayClientRtt = 0;
 
+  @observable
+  SyncPlayConnectionState connectionState =
+      SyncPlayConnectionState.disconnected;
+
   bool get hasSession => syncplayController != null;
 
   final ObservableList<SyncPlayChatMessage> chatMessages =
@@ -67,6 +71,11 @@ abstract class _PlayerSyncPlayController with Store {
   bool chatDanmakuEnabled = true;
 
   String _activeChatRoom = '';
+  String _requestedChatRoom = '';
+  String _requestedUsername = '';
+  Future<void> Function(int episode, {int currentRoad, int offset})?
+      _changeEpisode;
+  bool _connectionLossHandled = false;
   int _nextChatMessageId = 1;
 
   static const int maxChatMessages = 300;
@@ -75,6 +84,17 @@ abstract class _PlayerSyncPlayController with Store {
   int get chatMessageLengthLimit => maxChatMessageLength;
 
   String get activeChatRoom => _activeChatRoom;
+
+  /// The username accepted by the server for the current socket.
+  ///
+  /// This intentionally does not fall back to the username entered in the
+  /// room sheet. Until Hello arrives there is no local identity to compare
+  /// against incoming chat messages.
+  String get confirmedUsername => syncplayController?.username ?? '';
+
+  bool get isChatConnected =>
+      connectionState == SyncPlayConnectionState.connected &&
+      syncplayRoom.isNotEmpty;
 
   final StreamController<SyncPlayChatMessage> _chatStreamController =
       StreamController<SyncPlayChatMessage>.broadcast();
@@ -105,8 +125,16 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void appendSystemMessage(String message, {String username = '系统'}) {
+    if (chatMessages.isNotEmpty) {
+      final previous = chatMessages.last;
+      if (previous.type == SyncPlayChatMessageType.system &&
+          previous.username == normalizeSyncPlayUsername(username) &&
+          previous.message == message) {
+        return;
+      }
+    }
     emitChatMessage(
-      username: username,
+      username: normalizeSyncPlayUsername(username),
       message: message,
       fromRemote: true,
       type: SyncPlayChatMessageType.system,
@@ -124,22 +152,33 @@ abstract class _PlayerSyncPlayController with Store {
       return;
     }
 
+    final validUsername = isSyncPlayUsernameValid(username);
+    final hasText = message.trim().isNotEmpty;
+    final effectiveType = type == SyncPlayChatMessageType.user &&
+            (!validUsername || !hasText)
+        ? SyncPlayChatMessageType.system
+        : type;
+    final safeUsername = validUsername
+        ? normalizeSyncPlayUsername(username)
+        : '系统';
     final chatMessage = SyncPlayChatMessage(
       id: _nextChatMessageId++,
-      username: username,
-      message: message,
+      username: safeUsername,
+      message: hasText ? message : '收到一条空消息',
       fromRemote: fromRemote,
       time: time ?? DateTime.now(),
-      type: type,
+      type: effectiveType,
     );
     chatMessages.add(chatMessage);
     while (chatMessages.length > maxChatMessages) {
       chatMessages.removeAt(0);
     }
-    if (type == SyncPlayChatMessageType.user && fromRemote && !chatVisible) {
+    if (effectiveType == SyncPlayChatMessageType.user &&
+        fromRemote &&
+        !chatVisible) {
       unreadChatCount++;
     }
-    if (type == SyncPlayChatMessageType.user) {
+    if (effectiveType == SyncPlayChatMessageType.user) {
       _chatStreamController.add(chatMessage);
     }
   }
@@ -193,15 +232,21 @@ abstract class _PlayerSyncPlayController with Store {
     if (_connectionSessions.isClosed) {
       return;
     }
+    _requestedChatRoom = room;
+    _requestedUsername = username;
+    _changeEpisode = changeEpisode;
     final session = _connectionSessions.begin();
+    final reconnecting = preserveChatHistory ||
+        connectionState == SyncPlayConnectionState.reconnecting;
     final previousClient = syncplayController;
+    _connectionLossHandled = false;
+    connectionState = reconnecting
+        ? SyncPlayConnectionState.reconnecting
+        : SyncPlayConnectionState.connecting;
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
     beginChatSession(room, preserveHistory: preserveChatHistory);
-    if (preserveChatHistory) {
-      appendSystemMessage('正在重新连接');
-    }
     await previousClient?.disconnect();
     if (session.isStale) {
       return;
@@ -211,8 +256,14 @@ abstract class _PlayerSyncPlayController with Store {
     KazumiLogger().i('SyncPlay: connecting to $syncPlayEndPoint');
     final parsed = parseSyncPlayEndPoint(syncPlayEndPoint);
     if (parsed == null) {
+      _finishFailedConnection(
+        session,
+      );
       KazumiDialog.showToast(
         message: 'SyncPlay: 服务器地址不合法 $syncPlayEndPoint',
+        showActionButton: true,
+        actionLabel: '重新连接',
+        onActionPressed: retryConnection,
       );
       KazumiLogger().e('SyncPlay: invalid server address $syncPlayEndPoint');
       return;
@@ -237,22 +288,7 @@ abstract class _PlayerSyncPlayController with Store {
               error is SyncplayException ? error.message : error.toString();
           KazumiLogger().e('SyncPlay: error $message', error: error);
           if (error is SyncplayConnectionException) {
-            unawaited(_disconnect(
-              clearChatSession: false,
-              systemMessage: '连接已中断',
-            ));
-            KazumiDialog.showToast(
-              message: 'SyncPlay: 同步中断 $message',
-              duration: const Duration(seconds: 5),
-              showActionButton: true,
-              actionLabel: '重新连接',
-              onActionPressed: () => createRoom(
-                room,
-                username,
-                changeEpisode,
-                preserveChatHistory: true,
-              ),
-            );
+            unawaited(_handleConnectionLoss(session, client, message));
           }
         },
       );
@@ -274,16 +310,12 @@ abstract class _PlayerSyncPlayController with Store {
             }
           }
           if (message['type'] == 'left') {
-            appendSystemMessage('${message['username']} 离开了房间');
-            KazumiDialog.showToast(
-                message: 'SyncPlay: ${message['username']} 离开了房间',
-                duration: const Duration(seconds: 5));
+            final sender = normalizeSyncPlayUsername(message['username']);
+            appendSystemMessage('$sender 离开了房间');
           }
           if (message['type'] == 'joined') {
-            appendSystemMessage('${message['username']} 加入了房间');
-            KazumiDialog.showToast(
-                message: 'SyncPlay: ${message['username']} 加入了房间',
-                duration: const Duration(seconds: 5));
+            final sender = normalizeSyncPlayUsername(message['username']);
+            appendSystemMessage('$sender 加入了房间');
           }
         },
       );
@@ -314,9 +346,10 @@ abstract class _PlayerSyncPlayController with Store {
           if (!_isCurrentConnection(session, client)) {
             return;
           }
-          final String sender = (message['username'] ?? '').toString();
+          final String sender = normalizeSyncPlayUsername(message['username']);
           final String text = (message['message'] ?? '').toString();
-          final bool fromRemote = message['username'] != username;
+          final String confirmed = client.username ?? '';
+          final bool fromRemote = confirmed.isEmpty || sender != confirmed;
 
           emitChatMessage(
             username: sender,
@@ -374,32 +407,87 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
-      await client.joinRoom(room, username);
+      final hello = await client.joinRoom(room, username);
       if (!_isCurrentConnection(session, client)) {
         await client.disconnect();
         return;
       }
-      syncplayRoom = room;
-      if (preserveChatHistory) {
-        appendSystemMessage('已重新连接');
+      if (hello.room.trim().isEmpty) {
+        throw SyncplayProtocolException('SyncPlay: Hello 未确认房间');
       }
+      // Room and invite data become formal only after Hello. The returned
+      // username is also the identity used to classify local chat echoes.
+      beginChatSession(hello.room, preserveHistory: preserveChatHistory);
+      syncplayRoom = hello.room;
+      connectionState = SyncPlayConnectionState.connected;
     } catch (e) {
       KazumiLogger().e('SyncPlay: error', error: e);
       if (!_isCurrentConnection(session, client)) {
         await client.disconnect();
         return;
       }
-      await _disconnect(
-        clearChatSession: false,
-        client: client,
-        systemMessage: '连接已中断',
-      );
+      await _disconnect(clearChatSession: false, client: client);
+      connectionState = SyncPlayConnectionState.failed;
       final message = e is SyncplayException ? e.message : e.toString();
       KazumiDialog.showToast(
         message: 'SyncPlay: 连接失败 $message',
         duration: const Duration(seconds: 5),
+        showActionButton: true,
+        actionLabel: '重新连接',
+        onActionPressed: retryConnection,
       );
     }
+  }
+
+  /// Repeats the last requested room using the existing session's history.
+  Future<void> retryConnection() async {
+    final room = _requestedChatRoom;
+    final username = _requestedUsername;
+    final changeEpisode = _changeEpisode;
+    if (room.isEmpty || changeEpisode == null ||
+        connectionState == SyncPlayConnectionState.disconnected) {
+      return;
+    }
+    await createRoom(
+      room,
+      username,
+      changeEpisode,
+      preserveChatHistory: true,
+    );
+  }
+
+  void _finishFailedConnection(AsyncSession session) {
+    if (!session.isActive) {
+      return;
+    }
+    syncplayController = null;
+    syncplayRoom = '';
+    syncplayClientRtt = 0;
+    connectionState = SyncPlayConnectionState.failed;
+  }
+
+  Future<void> _handleConnectionLoss(
+    AsyncSession session,
+    SyncplayClient client,
+    String error,
+  ) async {
+    if (!_isCurrentConnection(session, client) || _connectionLossHandled) {
+      return;
+    }
+    _connectionLossHandled = true;
+    _connectionSessions.cancel();
+    syncplayController = null;
+    syncplayRoom = '';
+    syncplayClientRtt = 0;
+    connectionState = SyncPlayConnectionState.reconnecting;
+    await client.disconnect();
+    KazumiDialog.showToast(
+      message: 'SyncPlay: 同步中断 $error',
+      duration: const Duration(seconds: 5),
+      showActionButton: true,
+      actionLabel: '重新连接',
+      onActionPressed: retryConnection,
+    );
   }
 
   bool _isCurrentConnection(AsyncSession session, SyncplayClient client) {
@@ -500,9 +588,16 @@ abstract class _PlayerSyncPlayController with Store {
       syncplayController = null;
       syncplayRoom = '';
       syncplayClientRtt = 0;
+      if (clearChatSession) {
+        connectionState = SyncPlayConnectionState.disconnected;
+      }
     }
     if (clearChatSession) {
       this.clearChatSession();
+      _requestedChatRoom = '';
+      _requestedUsername = '';
+      _changeEpisode = null;
+      _connectionLossHandled = true;
     } else if (systemMessage != null) {
       appendSystemMessage(systemMessage);
     }

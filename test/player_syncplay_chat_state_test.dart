@@ -18,6 +18,42 @@ PlayerSyncPlayController _controller() {
 }
 
 void main() {
+  test('normalizes empty and unsafe server usernames to system identity', () {
+    expect(normalizeSyncPlayUsername(null), '系统');
+    expect(normalizeSyncPlayUsername(''), '系统');
+    expect(normalizeSyncPlayUsername('bad\nname'), '系统');
+    expect(normalizeSyncPlayUsername('alice'), 'alice');
+  });
+
+  test('invalid usernames and empty messages become system entries', () async {
+    final controller = _controller();
+    controller.appendUserMessage(username: '', message: 'hello');
+    controller.appendUserMessage(username: 'friend', message: '   ');
+
+    expect(controller.chatMessages, hasLength(2));
+    expect(
+      controller.chatMessages.every(
+        (message) => message.type == SyncPlayChatMessageType.system,
+      ),
+      isTrue,
+    );
+    await controller.dispose();
+  });
+
+  test('starts disconnected and explicit exit returns to disconnected', () async {
+    final controller = _controller();
+    expect(
+      controller.connectionState,
+      SyncPlayConnectionState.disconnected,
+    );
+    await controller.exitRoom();
+    expect(
+      controller.connectionState,
+      SyncPlayConnectionState.disconnected,
+    );
+    await controller.dispose();
+  });
+
   test('stores local and remote messages with stable local ids', () async {
     final controller = _controller();
     controller.appendUserMessage(username: 'me', message: 'hello');

@@ -47,6 +47,46 @@ enum DanmakuDestination {
   remoteDanmaku,
 }
 
+/// The lifecycle of the SyncPlay connection owned by the player.
+///
+/// A socket being allocated is deliberately not the same thing as being
+/// connected: the server's Hello response is the point at which the room and
+/// identity are authoritative.
+enum SyncPlayConnectionState {
+  disconnected,
+  connecting,
+  connected,
+  reconnecting,
+  failed,
+}
+
+/// Returns a safe display name for data received from a SyncPlay server.
+///
+/// Usernames are server supplied and are also rendered in system messages and
+/// mention matching. Keeping control characters (or an unbounded value) here
+/// would make those two paths ambiguous, so malformed values become a
+/// localized system identity instead of being interpolated into the UI.
+String normalizeSyncPlayUsername(Object? value, {String fallback = '系统'}) {
+  final text = value?.toString().trim() ?? '';
+  if (!isSyncPlayUsernameValid(value)) {
+    return fallback;
+  }
+  return text;
+}
+
+bool isSyncPlayUsernameValid(Object? value) {
+  final text = value?.toString().trim() ?? '';
+  if (text.isEmpty || text.length > 32) {
+    return false;
+  }
+  for (final codeUnit in text.codeUnits) {
+    if (codeUnit < 0x20 || codeUnit == 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
 enum SyncPlayChatMessageType {
   user,
   system,

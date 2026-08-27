@@ -515,9 +515,10 @@ class PlayerController implements Disposable {
     try {
       episode = currentEpisode;
     } catch (_) {}
-    final room = syncplay.syncplayRoom.isNotEmpty
-        ? syncplay.syncplayRoom
-        : syncplay.activeChatRoom;
+    // A requested room is not an invite until the server confirms it in
+    // Hello. Keeping this empty while connecting prevents sharing a room
+    // number that may have been rejected or renamed by the server.
+    final room = syncplay.syncplayRoom;
     return '''Kazumi 一起看邀请
 番剧：$title
 剧集：第 $episode 集
