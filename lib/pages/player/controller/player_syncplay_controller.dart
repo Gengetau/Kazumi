@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -25,12 +26,21 @@ class PlayerSyncPlayController = _PlayerSyncPlayController
     with _$PlayerSyncPlayController;
 
 abstract class _PlayerSyncPlayController with Store {
-  _PlayerSyncPlayController({SyncplayClientFactory? clientFactory})
+  _PlayerSyncPlayController({
+    SyncplayClientFactory? clientFactory,
+    @visibleForTesting String Function()? endpointProvider,
+  })
       : _clientFactory = clientFactory ??
             ({required String host, required int port}) =>
-                SyncplayClient(host: host, port: port);
+                SyncplayClient(host: host, port: port),
+        _endpointProvider = endpointProvider;
 
   final SyncplayClientFactory _clientFactory;
+
+  /// Supplies the configured endpoint in production. Tests may inject a
+  /// deterministic endpoint while using a fake client, without touching
+  /// Hive-backed application settings or a real socket.
+  final String Function()? _endpointProvider;
 
   /// Set before the socket opens and cleared on teardown, so unlike
   /// [syncplayRoom] it also covers the window where the connection is still
@@ -544,7 +554,7 @@ abstract class _PlayerSyncPlayController with Store {
     if (session.isStale) {
       return;
     }
-    final String syncPlayEndPoint =
+    final String syncPlayEndPoint = _endpointProvider?.call() ??
         GStorage.getSetting(SettingsKeys.syncPlayEndPoint);
     KazumiLogger().i('SyncPlay: connecting to $syncPlayEndPoint');
     final parsed = parseSyncPlayEndPoint(syncPlayEndPoint);

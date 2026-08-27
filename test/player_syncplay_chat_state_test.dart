@@ -3,18 +3,7 @@ import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 
 PlayerSyncPlayController _controller() {
-  return PlayerSyncPlayController(
-    bangumiId: () => 1,
-    currentEpisode: () => 1,
-    currentRoad: () => 0,
-    playing: () => false,
-    currentPosition: () => Duration.zero,
-    playerPosition: () => Duration.zero,
-    duration: () => const Duration(minutes: 20),
-    pause: ({bool enableSync = true}) async {},
-    play: ({bool enableSync = true}) async {},
-    seek: (duration, {bool enableSync = true}) async {},
-  );
+  return PlayerSyncPlayController();
 }
 
 void main() {

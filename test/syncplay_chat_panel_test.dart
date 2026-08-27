@@ -5,18 +5,7 @@ import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 
 PlayerSyncPlayController _controller({bool connected = false}) {
-  final controller = PlayerSyncPlayController(
-    bangumiId: () => 1,
-    currentEpisode: () => 1,
-    currentRoad: () => 0,
-    playing: () => false,
-    currentPosition: () => Duration.zero,
-    playerPosition: () => Duration.zero,
-    duration: () => const Duration(minutes: 20),
-    pause: ({bool enableSync = true}) async {},
-    play: ({bool enableSync = true}) async {},
-    seek: (duration, {bool enableSync = true}) async {},
-  );
+  final controller = PlayerSyncPlayController();
   if (connected) {
     controller.syncplayController = SyncplayClient(host: 'localhost', port: 1);
     controller.syncplayRoom = '123456';
