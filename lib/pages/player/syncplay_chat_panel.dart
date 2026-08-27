@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
@@ -268,10 +269,12 @@ class SyncPlayChatList extends StatefulWidget {
     super.key,
     required this.controller,
     this.maxBubbleWidth,
+    this.onReply,
   });
 
   final PlayerSyncPlayController controller;
   final double? maxBubbleWidth;
+  final ValueChanged<String>? onReply;
 
   @override
   State<SyncPlayChatList> createState() => _SyncPlayChatListState();
@@ -352,7 +355,9 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
   Widget build(BuildContext context) {
     return Observer(
       builder: (context) {
-        final messages = controller.chatMessages.toList(growable: false);
+        final messages = controller.chatMessages
+            .where((message) => !controller.isChatUserMuted(message.username))
+            .toList(growable: false);
         _scheduleScrollIfNeeded(messages);
         if (messages.isEmpty) {
           return Center(
@@ -371,10 +376,21 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
               controller: _scrollController,
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: messages.length,
-              itemBuilder: (context, index) => SyncPlayChatTile(
-                message: messages[index],
-                maxBubbleWidth: widget.maxBubbleWidth,
-              ),
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                final grouped = index > 0 &&
+                    messages[index - 1].canGroupWith(message);
+                return SyncPlayChatTile(
+                  controller: controller,
+                  message: message,
+                  maxBubbleWidth: widget.maxBubbleWidth,
+                  grouped: grouped,
+                  showSender: !grouped,
+                  showTime: index == messages.length - 1 ||
+                      !message.canGroupWith(messages[index + 1]),
+                  onReply: widget.onReply,
+                );
+              },
             ),
             if (_hasNewMessages)
               Positioned(
@@ -410,12 +426,31 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
 class SyncPlayChatTile extends StatelessWidget {
   const SyncPlayChatTile({
     super.key,
+    required this.controller,
     required this.message,
     this.maxBubbleWidth,
+    this.grouped = false,
+    this.showSender = true,
+    this.showTime = true,
+    this.onReply,
   });
 
+  final PlayerSyncPlayController controller;
   final SyncPlayChatMessage message;
   final double? maxBubbleWidth;
+  final bool grouped;
+  final bool showSender;
+  final bool showTime;
+  final ValueChanged<String>? onReply;
+
+  static const _avatarColors = [
+    Color(0xff6750a4),
+    Color(0xff006a6a),
+    Color(0xff9c4146),
+    Color(0xff825500),
+    Color(0xff315f90),
+    Color(0xff675069),
+  ];
 
   String _formatTime(DateTime time) {
     final hour = time.hour.toString().padLeft(2, '0');
@@ -423,29 +458,200 @@ class SyncPlayChatTile extends StatelessWidget {
     return '$hour:$minute';
   }
 
+  Color _avatarColor(String username) {
+    return _avatarColors[
+        syncPlayUsernameHash(username) % _avatarColors.length];
+  }
+
+  Future<void> _showActions(BuildContext context) async {
+    if (message.type == SyncPlayChatMessageType.system) {
+      return;
+    }
+    final action = await showModalBottomSheet<_ChatTileAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        final muted = controller.isChatUserMuted(message.username);
+        return SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.copy_rounded),
+                title: const Text('复制文本'),
+                onTap: () => Navigator.of(context).pop(_ChatTileAction.copy),
+              ),
+              ListTile(
+                leading: const Icon(Icons.reply_rounded),
+                title: const Text('引用回复'),
+                onTap: () => Navigator.of(context).pop(_ChatTileAction.reply),
+              ),
+              if (message.fromRemote)
+                ListTile(
+                  leading: Icon(
+                    muted ? Icons.visibility_rounded : Icons.visibility_off,
+                  ),
+                  title: Text(muted ? '取消屏蔽用户' : '屏蔽用户'),
+                  onTap: () => Navigator.of(context).pop(
+                    muted ? _ChatTileAction.unmute : _ChatTileAction.mute,
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!context.mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case _ChatTileAction.copy:
+        await Clipboard.setData(ClipboardData(text: message.message));
+      case _ChatTileAction.reply:
+        onReply?.call('↩ ${message.username}：${message.message}\n');
+      case _ChatTileAction.mute:
+        controller.setChatUserMuted(message.username, true);
+      case _ChatTileAction.unmute:
+        controller.setChatUserMuted(message.username, false);
+    }
+  }
+
+  Widget _buildSelectionMenu(
+    BuildContext context,
+    EditableTextState state,
+  ) {
+    final items = <ContextMenuButtonItem>[
+      ContextMenuButtonItem(
+        label: '复制文本',
+        onPressed: () {
+          Clipboard.setData(ClipboardData(text: message.message));
+          state.hideToolbar();
+        },
+      ),
+      ContextMenuButtonItem(
+        label: '引用回复',
+        onPressed: () {
+          state.hideToolbar();
+          onReply?.call('↩ ${message.username}：${message.message}\n');
+        },
+      ),
+    ];
+    if (message.fromRemote) {
+      final muted = controller.isChatUserMuted(message.username);
+      items.add(
+        ContextMenuButtonItem(
+          label: muted ? '取消屏蔽用户' : '屏蔽用户',
+          onPressed: () {
+            state.hideToolbar();
+            controller.setChatUserMuted(message.username, !muted);
+          },
+        ),
+      );
+    }
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: state.contextMenuAnchors,
+      buttonItems: items,
+    );
+  }
+
+  Widget _buildMentionText(
+    BuildContext context,
+    Color textColor,
+  ) {
+    final username = controller.confirmedUsername;
+    final mentionPattern = isSyncPlayUsernameValid(username)
+        ? RegExp(
+            r'(^|[\s\(\[\{（【「“‘])@' + RegExp.escape(username) +
+                r'(?=$|[\s,.!?！？:：;；\)\]\}）】」”’])',
+            caseSensitive: false,
+          )
+        : (message.mentionsSelf ? RegExp(r'@[^\s]+') : null);
+    if (mentionPattern == null || !mentionPattern.hasMatch(message.message)) {
+      return SelectableText(
+        message.message,
+        contextMenuBuilder: (context, state) =>
+            _buildSelectionMenu(context, state),
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: textColor,
+            ),
+      );
+    }
+    final spans = <TextSpan>[];
+    var cursor = 0;
+    for (final match in mentionPattern.allMatches(message.message)) {
+      final prefixLength = match.group(1)?.length ?? 0;
+      final mentionStart = match.start + prefixLength;
+      if (mentionStart > cursor) {
+        spans.add(
+          TextSpan(text: message.message.substring(cursor, mentionStart)),
+        );
+      }
+      spans.add(
+        TextSpan(
+          text: message.message.substring(mentionStart, match.end),
+          style: TextStyle(
+            color: textColor,
+            backgroundColor: Theme.of(context).colorScheme.tertiaryContainer,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+      cursor = match.end;
+    }
+    if (cursor < message.message.length) {
+      spans.add(TextSpan(text: message.message.substring(cursor)));
+    }
+    return SelectableText.rich(
+      TextSpan(
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: textColor,
+            ),
+        children: spans,
+      ),
+      contextMenuBuilder: (context, state) =>
+          _buildSelectionMenu(context, state),
+    );
+  }
+
+  Widget _buildAvatar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return CircleAvatar(
+      radius: 15,
+      backgroundColor: _avatarColor(message.username),
+      foregroundColor: colorScheme.onPrimary,
+      child: Text(
+        syncPlayUsernameInitial(message.username),
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (message.type == SyncPlayChatMessageType.system) {
+      final theme = Theme.of(context);
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Center(
+          key: ValueKey<int>(message.id),
+          child: Text(
+            message.message,
+            textAlign: TextAlign.center,
+            softWrap: true,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
     return Observer(
       builder: (context) {
         final theme = Theme.of(context);
         final colorScheme = theme.colorScheme;
-        if (message.type == SyncPlayChatMessageType.system) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Center(
-              key: ValueKey<int>(message.id),
-              child: Text(
-                message.message,
-                textAlign: TextAlign.center,
-                softWrap: true,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          );
+        final muted = controller.isChatUserMuted(message.username);
+        if (muted && message.fromRemote) {
+          return const SizedBox.shrink();
         }
-
         final remote = message.fromRemote;
         final bubbleColor = remote
             ? colorScheme.surfaceContainerHighest
@@ -453,29 +659,26 @@ class SyncPlayChatTile extends StatelessWidget {
         final textColor = remote
             ? colorScheme.onSurfaceVariant
             : colorScheme.onPrimaryContainer;
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: Align(
-            alignment: remote ? Alignment.centerLeft : Alignment.centerRight,
-            child: ConstrainedBox(
-              key: ValueKey<int>(message.id),
-              constraints: BoxConstraints(
-                maxWidth: maxBubbleWidth ??
-                    MediaQuery.sizeOf(context).width * .76,
-              ),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: bubbleColor,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
+        final bubble = ConstrainedBox(
+          key: ValueKey<int>(message.id),
+          constraints: BoxConstraints(
+            maxWidth: maxBubbleWidth ?? MediaQuery.sizeOf(context).width * .76,
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: bubbleColor,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showSender || showTime)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (showSender)
                           Flexible(
                             child: Text(
                               message.username,
@@ -485,26 +688,47 @@ class SyncPlayChatTile extends StatelessWidget {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                        if (showSender && showTime) const SizedBox(width: 8),
+                        if (showTime)
                           Text(
                             _formatTime(message.time),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: textColor.withValues(alpha: .65),
                             ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        message.message,
-                        softWrap: true,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: textColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                      ],
+                    ),
+                  if (showSender || showTime) const SizedBox(height: 2),
+                  _buildMentionText(context, textColor),
+                ],
+              ),
+            ),
+          ),
+        );
+        final tile = Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: remote
+              ? MainAxisAlignment.start
+              : MainAxisAlignment.end,
+          children: remote
+              ? [if (showSender) _buildAvatar(context), bubble]
+              : [bubble, if (showSender) _buildAvatar(context)],
+        );
+        return Listener(
+          onPointerDown: (event) {
+            if (event.kind == PointerDeviceKind.mouse &&
+                (event.buttons & kSecondaryMouseButton) != 0) {
+              unawaited(_showActions(context));
+            }
+          },
+          child: GestureDetector(
+            onLongPress: () => unawaited(_showActions(context)),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(12, grouped ? 1 : 4, 12, 4),
+              child: Align(
+                alignment:
+                    remote ? Alignment.centerLeft : Alignment.centerRight,
+                child: tile,
               ),
             ),
           ),
@@ -513,6 +737,8 @@ class SyncPlayChatTile extends StatelessWidget {
     );
   }
 }
+
+enum _ChatTileAction { copy, reply, mute, unmute }
 
 class _SendChatIntent extends Intent {
   const _SendChatIntent();
@@ -531,10 +757,10 @@ class SyncPlayChatComposer extends StatefulWidget {
   final Future<bool> Function(String message) onSend;
 
   @override
-  State<SyncPlayChatComposer> createState() => _SyncPlayChatComposerState();
+  SyncPlayChatComposerState createState() => SyncPlayChatComposerState();
 }
 
-class _SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
+class SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
   final TextEditingController _textController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   bool _sending = false;
@@ -543,6 +769,17 @@ class _SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
   PlayerSyncPlayController get controller => widget.controller;
 
   bool get _isConnected => controller.isChatConnected;
+
+  void setDraft(String draft) {
+    if (!mounted) {
+      return;
+    }
+    _textController.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: draft.length),
+    );
+    _focusNode.requestFocus();
+  }
 
   @override
   void dispose() {
@@ -690,7 +927,7 @@ class _SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
 }
 
 /// The chat surface for the currently active SyncPlay room.
-class SyncPlayChatPanel extends StatelessWidget {
+class SyncPlayChatPanel extends StatefulWidget {
   const SyncPlayChatPanel({
     super.key,
     required this.controller,
@@ -717,6 +954,18 @@ class SyncPlayChatPanel extends StatelessWidget {
   final VoidCallback? onClearHistory;
 
   @override
+  State<SyncPlayChatPanel> createState() => _SyncPlayChatPanelState();
+}
+
+class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
+  final GlobalKey<SyncPlayChatComposerState> _composerKey =
+      GlobalKey<SyncPlayChatComposerState>();
+
+  void _reply(String quote) {
+    _composerKey.currentState?.setDraft(quote);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -727,24 +976,29 @@ class SyncPlayChatPanel extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SyncPlayChatHeader(
-              controller: controller,
-              inviteText: inviteText,
-              inviteTextBuilder: inviteTextBuilder,
-              onCopyInvite: onCopyInvite,
-              compact: compact,
-              globalDanmakuEnabled: globalDanmakuEnabled,
-              onEnableGlobalDanmaku: onEnableGlobalDanmaku,
-              onReconnect: onReconnect,
-              onClearHistory: onClearHistory,
+              controller: widget.controller,
+              inviteText: widget.inviteText,
+              inviteTextBuilder: widget.inviteTextBuilder,
+              onCopyInvite: widget.onCopyInvite,
+              compact: widget.compact,
+              globalDanmakuEnabled: widget.globalDanmakuEnabled,
+              onEnableGlobalDanmaku: widget.onEnableGlobalDanmaku,
+              onReconnect: widget.onReconnect,
+              onClearHistory: widget.onClearHistory,
             ),
             const Divider(height: 1),
             Expanded(
               child: SyncPlayChatList(
-                controller: controller,
+                controller: widget.controller,
                 maxBubbleWidth: availableWidth * .76,
+                onReply: _reply,
               ),
             ),
-            SyncPlayChatComposer(controller: controller, onSend: onSend),
+            SyncPlayChatComposer(
+              key: _composerKey,
+              controller: widget.controller,
+              onSend: widget.onSend,
+            ),
           ],
         );
       },

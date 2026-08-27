@@ -57,8 +57,8 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     });
   }
 
-  late final _$connectionStateAtom = Atom(
-      name: '_PlayerSyncPlayController.connectionState', context: context);
+  late final _$connectionStateAtom =
+      Atom(name: '_PlayerSyncPlayController.connectionState', context: context);
 
   @override
   SyncPlayConnectionState get connectionState {
@@ -86,6 +86,22 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
   set unreadChatCount(int value) {
     _$unreadChatCountAtom.reportWrite(value, super.unreadChatCount, () {
       super.unreadChatCount = value;
+    });
+  }
+
+  late final _$unreadMentionCountAtom = Atom(
+      name: '_PlayerSyncPlayController.unreadMentionCount', context: context);
+
+  @override
+  int get unreadMentionCount {
+    _$unreadMentionCountAtom.reportRead();
+    return super.unreadMentionCount;
+  }
+
+  @override
+  set unreadMentionCount(int value) {
+    _$unreadMentionCountAtom.reportWrite(value, super.unreadMentionCount, () {
+      super.unreadMentionCount = value;
     });
   }
 
@@ -169,6 +185,7 @@ syncplayRoom: ${syncplayRoom},
 syncplayClientRtt: ${syncplayClientRtt},
 connectionState: ${connectionState},
 unreadChatCount: ${unreadChatCount},
+unreadMentionCount: ${unreadMentionCount},
 chatVisible: ${chatVisible},
 appForeground: ${appForeground},
 windowFocused: ${windowFocused},

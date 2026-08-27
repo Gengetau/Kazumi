@@ -150,6 +150,94 @@ void main() {
     await controller.dispose();
   });
 
+  test('tracks mention unread separately from ordinary unread', () async {
+    final controller = _controller();
+    controller.appendUserMessage(
+      username: 'friend',
+      message: '@me hello',
+      fromRemote: true,
+      mentionsSelf: true,
+    );
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'ordinary',
+      fromRemote: true,
+    );
+
+    expect(controller.unreadChatCount, 2);
+    expect(controller.unreadMentionCount, 1);
+    expect(controller.unreadChatLabel, '@1');
+    controller.markChatRead();
+    expect(controller.unreadMentionCount, 0);
+    await controller.dispose();
+  });
+
+  test(
+    'session mute removes existing messages and suppresses future ones',
+    () async {
+      final controller = _controller();
+      controller.appendUserMessage(
+        username: 'friend',
+        message: 'before',
+        fromRemote: true,
+      );
+      controller.setChatUserMuted('friend', true);
+      controller.appendUserMessage(
+        username: 'friend',
+        message: 'after',
+        fromRemote: true,
+      );
+
+      expect(controller.chatMessages, isEmpty);
+      expect(controller.isChatUserMuted('friend'), isTrue);
+      controller.setChatUserMuted('friend', false);
+      controller.appendUserMessage(
+        username: 'friend',
+        message: 'visible again',
+        fromRemote: true,
+      );
+      expect(controller.chatMessages.single.message, 'visible again');
+      await controller.dispose();
+    },
+  );
+
+  test('message grouping requires same user and a one-minute window', () {
+    final first = SyncPlayChatMessage(
+      id: 1,
+      username: 'friend',
+      message: 'one',
+      fromRemote: true,
+      time: DateTime(2026, 1, 1, 12),
+    );
+    final second = SyncPlayChatMessage(
+      id: 2,
+      username: 'friend',
+      message: 'two',
+      fromRemote: true,
+      time: DateTime(2026, 1, 1, 12, 0, 59),
+    );
+    final late = SyncPlayChatMessage(
+      id: 3,
+      username: 'friend',
+      message: 'three',
+      fromRemote: true,
+      time: DateTime(2026, 1, 1, 12, 2),
+    );
+
+    expect(second.canGroupWith(first), isTrue);
+    expect(late.canGroupWith(second), isFalse);
+    expect(syncPlayUsernameHash('friend'), syncPlayUsernameHash('friend'));
+    expect(syncPlayUsernameInitial('friend'), 'f');
+  });
+
+  test('mentions require a username boundary', () {
+    expect(syncPlayMessageMentionsUsername('@me hello', 'me'), isTrue);
+    expect(syncPlayMessageMentionsUsername('hello @me!', 'me'), isTrue);
+    expect(syncPlayMessageMentionsUsername('hello@me', 'me'), isFalse);
+    expect(syncPlayMessageMentionsUsername('@merry', 'me'), isFalse);
+    expect(syncPlayMessageMentionsUsername('@me_extra', 'me'), isFalse);
+  });
+
   test('chat history is capped at 300 messages', () async {
     final controller = _controller();
     for (var i = 0; i < 301; i++) {

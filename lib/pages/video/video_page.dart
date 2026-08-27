@@ -1294,12 +1294,17 @@ class _VideoPageState extends State<VideoPage>
                     const Tab(text: '评论'),
                     Observer(
                       builder: (context) {
-                        final unread =
-                            playerController.syncplay.unreadChatCount;
+                        final syncplay = playerController.syncplay;
+                        final unread = syncplay.unreadChatCount;
+                        final mentions = syncplay.unreadMentionCount;
                         return Tab(
                           child: Badge(
                             isLabelVisible: unread > 0,
-                            label: Text(unread > 99 ? '99+' : '$unread'),
+                            label: Text(
+                              mentions > 0
+                                  ? '@${mentions > 99 ? '99+' : mentions}'
+                                  : (unread > 99 ? '99+' : '$unread'),
+                            ),
                             child: const Text('聊天'),
                           ),
                         );

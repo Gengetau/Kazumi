@@ -67,7 +67,7 @@ enum SyncPlayConnectionState {
 /// would make those two paths ambiguous, so malformed values become a
 /// localized system identity instead of being interpolated into the UI.
 String normalizeSyncPlayUsername(Object? value, {String fallback = '系统'}) {
-  final text = value?.toString().trim() ?? '';
+  final text = value is String ? value.trim() : '';
   if (!isSyncPlayUsernameValid(value)) {
     return fallback;
   }
@@ -75,7 +75,10 @@ String normalizeSyncPlayUsername(Object? value, {String fallback = '系统'}) {
 }
 
 bool isSyncPlayUsernameValid(Object? value) {
-  final text = value?.toString().trim() ?? '';
+  if (value is! String) {
+    return false;
+  }
+  final text = value.trim();
   if (text.isEmpty || text.length > 32) {
     return false;
   }
@@ -85,6 +88,35 @@ bool isSyncPlayUsernameValid(Object? value) {
     }
   }
   return true;
+}
+
+int syncPlayUsernameHash(String username) {
+  var hash = 0x811c9dc5;
+  for (final codeUnit in username.codeUnits) {
+    hash ^= codeUnit;
+    hash = (hash * 0x01000193) & 0x7fffffff;
+  }
+  return hash;
+}
+
+String syncPlayUsernameInitial(String username) {
+  final safeName = normalizeSyncPlayUsername(username, fallback: '?');
+  if (safeName == '?') {
+    return safeName;
+  }
+  return String.fromCharCodes(safeName.runes.take(1));
+}
+
+bool syncPlayMessageMentionsUsername(String message, String username) {
+  if (!isSyncPlayUsernameValid(username) || message.isEmpty) {
+    return false;
+  }
+  final pattern = RegExp(
+    r'(^|[\s\(\[\{（【「“‘])@' + RegExp.escape(username) +
+        r'(?=$|[\s,.!?！？:：;；\)\]\}）】」”’])',
+    caseSensitive: false,
+  );
+  return pattern.hasMatch(message);
 }
 
 enum SyncPlayChatMessageType {
@@ -101,6 +133,7 @@ class SyncPlayChatMessage {
   final bool fromRemote;
   final DateTime time;
   final SyncPlayChatMessageType type;
+  final bool mentionsSelf;
 
   const SyncPlayChatMessage({
     required this.id,
@@ -109,5 +142,16 @@ class SyncPlayChatMessage {
     required this.fromRemote,
     required this.time,
     this.type = SyncPlayChatMessageType.user,
+    this.mentionsSelf = false,
   });
+
+  bool canGroupWith(SyncPlayChatMessage other) {
+    if (type != SyncPlayChatMessageType.user ||
+        other.type != SyncPlayChatMessageType.user ||
+        username != other.username ||
+        fromRemote != other.fromRemote) {
+      return false;
+    }
+    return time.difference(other.time).inSeconds.abs() <= 60;
+  }
 }

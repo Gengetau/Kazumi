@@ -166,4 +166,66 @@ void main() {
     expect(tester.takeException(), isNull);
     await _disposePanel(tester, controller);
   });
+
+  testWidgets('long press opens message actions and quotes into the draft', (
+    tester,
+  ) async {
+    final controller = _controller(connected: true);
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'hello',
+      fromRemote: true,
+    );
+    await tester.pumpWidget(
+      _app(
+        SyncPlayChatPanel(controller: controller, onSend: (_) async => true),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(SelectableText), findsOneWidget);
+    await tester.longPress(find.byType(SelectableText));
+    await tester.pumpAndSettle();
+    expect(find.text('复制文本'), findsOneWidget);
+    expect(find.text('引用回复'), findsOneWidget);
+
+    await tester.tap(find.text('引用回复'));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.controller!.text, '↩ friend：hello\n');
+
+    await tester.enterText(find.byType(TextField), '↩ friend：hello\n继续');
+    expect(field.controller!.text, '↩ friend：hello\n继续');
+    await _disposePanel(tester, controller);
+  });
+
+  testWidgets('groups consecutive messages with sender on first and time last', (
+    tester,
+  ) async {
+    final controller = _controller(connected: true);
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'one',
+      fromRemote: true,
+      time: DateTime(2026, 1, 1, 12),
+    );
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'two',
+      fromRemote: true,
+      time: DateTime(2026, 1, 1, 12, 1),
+    );
+    await tester.pumpWidget(
+      _app(
+        SyncPlayChatPanel(controller: controller, onSend: (_) async => true),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('friend'), findsOneWidget);
+    expect(find.text('12:00'), findsNothing);
+    expect(find.text('12:01'), findsOneWidget);
+    expect(find.byType(CircleAvatar), findsOneWidget);
+    await _disposePanel(tester, controller);
+  });
 }

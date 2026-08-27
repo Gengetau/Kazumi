@@ -65,6 +65,9 @@ abstract class _PlayerSyncPlayController with Store {
   int unreadChatCount = 0;
 
   @observable
+  int unreadMentionCount = 0;
+
+  @observable
   bool chatVisible = false;
 
   @observable
@@ -76,6 +79,8 @@ abstract class _PlayerSyncPlayController with Store {
 
   @observable
   bool chatDanmakuEnabled = true;
+
+  final ObservableSet<String> mutedChatUsers = ObservableSet<String>();
 
   String _activeChatRoom = '';
   String _requestedChatRoom = '';
@@ -97,7 +102,12 @@ abstract class _PlayerSyncPlayController with Store {
   /// This intentionally does not fall back to the username entered in the
   /// room sheet. Until Hello arrives there is no local identity to compare
   /// against incoming chat messages.
-  String get confirmedUsername => syncplayController?.username ?? '';
+  String get confirmedUsername {
+    final username = syncplayController?.username;
+    return isSyncPlayUsernameValid(username)
+        ? normalizeSyncPlayUsername(username)
+        : '';
+  }
 
   bool get isChatConnected =>
       syncplayController != null &&
@@ -126,12 +136,17 @@ abstract class _PlayerSyncPlayController with Store {
     required String message,
     bool fromRemote = false,
     DateTime? time,
+    bool? mentionsSelf,
   }) {
+    if (fromRemote && isChatUserMuted(username)) {
+      return;
+    }
     emitChatMessage(
       username: username,
       message: message,
       fromRemote: fromRemote,
       time: time,
+      mentionsSelf: mentionsSelf,
     );
   }
 
@@ -158,6 +173,7 @@ abstract class _PlayerSyncPlayController with Store {
     required bool fromRemote,
     SyncPlayChatMessageType type = SyncPlayChatMessageType.user,
     DateTime? time,
+    bool? mentionsSelf,
   }) {
     if (_chatStreamController.isClosed) {
       return;
@@ -165,6 +181,9 @@ abstract class _PlayerSyncPlayController with Store {
 
     final validUsername = isSyncPlayUsernameValid(username);
     final hasText = message.trim().isNotEmpty;
+    if (fromRemote && validUsername && isChatUserMuted(username)) {
+      return;
+    }
     final effectiveType = type == SyncPlayChatMessageType.user &&
             (!validUsername || !hasText)
         ? SyncPlayChatMessageType.system
@@ -172,6 +191,8 @@ abstract class _PlayerSyncPlayController with Store {
     final safeUsername = validUsername
         ? normalizeSyncPlayUsername(username)
         : '系统';
+    final effectiveMention = effectiveType == SyncPlayChatMessageType.user &&
+        (mentionsSelf ?? _messageMentionsCurrentUser(message));
     final chatMessage = SyncPlayChatMessage(
       id: _nextChatMessageId++,
       username: safeUsername,
@@ -179,6 +200,7 @@ abstract class _PlayerSyncPlayController with Store {
       fromRemote: fromRemote,
       time: time ?? DateTime.now(),
       type: effectiveType,
+      mentionsSelf: effectiveMention,
     );
     chatMessages.add(chatMessage);
     while (chatMessages.length > maxChatMessages) {
@@ -188,6 +210,9 @@ abstract class _PlayerSyncPlayController with Store {
         fromRemote &&
         !chatVisible) {
       unreadChatCount++;
+      if (effectiveMention) {
+        unreadMentionCount++;
+      }
     }
     if (effectiveType == SyncPlayChatMessageType.user) {
       _chatStreamController.add(chatMessage);
@@ -220,11 +245,14 @@ abstract class _PlayerSyncPlayController with Store {
 
   void markChatRead() {
     unreadChatCount = 0;
+    unreadMentionCount = 0;
   }
 
   void clearChatSession() {
     chatMessages.clear();
     unreadChatCount = 0;
+    unreadMentionCount = 0;
+    mutedChatUsers.clear();
     _activeChatRoom = '';
   }
 
@@ -232,6 +260,64 @@ abstract class _PlayerSyncPlayController with Store {
   void clearChatHistory() {
     chatMessages.clear();
     unreadChatCount = 0;
+    unreadMentionCount = 0;
+    mutedChatUsers.clear();
+  }
+
+  bool isChatUserMuted(String username) {
+    final safeName = normalizeSyncPlayUsername(username);
+    return safeName != '系统' && mutedChatUsers.contains(safeName);
+  }
+
+  void setChatUserMuted(String username, bool muted) {
+    if (!isSyncPlayUsernameValid(username)) {
+      return;
+    }
+    final safeName = normalizeSyncPlayUsername(username);
+    if (muted) {
+      mutedChatUsers.add(safeName);
+      chatMessages.removeWhere(
+        (message) =>
+            message.type == SyncPlayChatMessageType.user &&
+            message.fromRemote &&
+            message.username == safeName,
+      );
+      _recalculateUnread();
+    } else {
+      mutedChatUsers.remove(safeName);
+    }
+  }
+
+  void toggleChatUserMuted(String username) {
+    setChatUserMuted(username, !isChatUserMuted(username));
+  }
+
+  String get unreadChatLabel {
+    if (unreadMentionCount > 0) {
+      return '@$unreadMentionCount';
+    }
+    return unreadChatCount > 99 ? '99+' : '$unreadChatCount';
+  }
+
+  bool _messageMentionsCurrentUser(String message) {
+    final username = confirmedUsername;
+    return syncPlayMessageMentionsUsername(message, username);
+  }
+
+  void _recalculateUnread() {
+    var unread = 0;
+    var mentions = 0;
+    for (final message in chatMessages) {
+      if (message.type == SyncPlayChatMessageType.user &&
+          message.fromRemote) {
+        unread++;
+        if (message.mentionsSelf) {
+          mentions++;
+        }
+      }
+    }
+    unreadChatCount = unread;
+    unreadMentionCount = mentions;
   }
 
   void setChatDanmakuEnabled(bool enabled) {
@@ -380,10 +466,13 @@ abstract class _PlayerSyncPlayController with Store {
           if (!_isCurrentConnection(session, client)) {
             return;
           }
-          final String sender = normalizeSyncPlayUsername(message['username']);
+          final rawSender = message['username'];
+          final String sender = rawSender is String ? rawSender : '';
           final String text = (message['message'] ?? '').toString();
-          final String confirmed = client.username ?? '';
-          final bool fromRemote = confirmed.isEmpty || sender != confirmed;
+          final String normalizedSender = normalizeSyncPlayUsername(sender);
+          final String confirmed = confirmedUsername;
+          final bool fromRemote =
+              confirmed.isEmpty || normalizedSender != confirmed;
 
           emitChatMessage(
             username: sender,
