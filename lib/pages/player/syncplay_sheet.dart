@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -39,7 +40,12 @@ Future<void> showSyncPlaySheet(
           playerController: playerController,
           changeEpisode: changeEpisode,
         ),
-      _SyncPlayDestination.server => const _SyncPlayServerSheet(),
+      _SyncPlayDestination.server => _SyncPlayServerSheet(
+          onSaved: playerController.syncplay.connectionState ==
+                  SyncPlayConnectionState.failed
+              ? playerController.syncplay.retryConnection
+              : null,
+        ),
     },
   );
 }
@@ -311,21 +317,48 @@ class _SyncPlayHomeSheet extends StatelessWidget {
       borderRadius: BorderRadius.circular(materialBottomSheetRadius),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(Icons.cloud_off_rounded, color: colorScheme.onErrorContainer),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                '连接失败，请检查服务器后重试',
-                style: theme.textTheme.bodyMedium?.copyWith(
+            Row(
+              children: [
+                Icon(
+                  Icons.cloud_off_rounded,
                   color: colorScheme.onErrorContainer,
                 ),
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    '连接失败，请检查服务器后重试',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            FilledButton.tonal(
-              onPressed: playerController.syncplay.retryConnection,
-              child: const Text('重试'),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        Navigator.of(context).pop(_SyncPlayDestination.server),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.onErrorContainer,
+                    ),
+                    icon: const Icon(Icons.dns_outlined),
+                    label: const Text('更换服务器'),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: playerController.syncplay.retryConnection,
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -755,7 +788,9 @@ class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
 }
 
 class _SyncPlayServerSheet extends StatefulWidget {
-  const _SyncPlayServerSheet();
+  const _SyncPlayServerSheet({this.onSaved});
+
+  final Future<void> Function()? onSaved;
 
   @override
   State<_SyncPlayServerSheet> createState() => _SyncPlayServerSheetState();
@@ -793,7 +828,7 @@ class _SyncPlayServerSheetState extends State<_SyncPlayServerSheet> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     String endPoint = _selectedEndPoint;
     if (endPoint == _customOption) {
       endPoint = _customEndPointController.text.trim();
@@ -802,8 +837,15 @@ class _SyncPlayServerSheetState extends State<_SyncPlayServerSheet> {
         return;
       }
     }
-    GStorage.putSetting<String>(SettingsKeys.syncPlayEndPoint, endPoint);
+    await GStorage.putSetting<String>(SettingsKeys.syncPlayEndPoint, endPoint);
+    if (!mounted) {
+      return;
+    }
     Navigator.of(context).pop();
+    final onSaved = widget.onSaved;
+    if (onSaved != null) {
+      unawaited(onSaved());
+    }
   }
 
   @override

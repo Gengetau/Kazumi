@@ -40,7 +40,8 @@ void main() {
     await controller.dispose();
   });
 
-  test('starts disconnected and explicit exit returns to disconnected', () async {
+  test('starts disconnected and explicit exit returns to disconnected',
+      () async {
     final controller = _controller();
     expect(
       controller.connectionState,
@@ -201,6 +202,62 @@ void main() {
     },
   );
 
+  test('muting a user preserves read state for other history', () async {
+    final controller = _controller();
+    controller.setChatVisible(true);
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'already read',
+      fromRemote: true,
+    );
+    controller.appendUserMessage(
+      username: 'other',
+      message: 'also read',
+      fromRemote: true,
+    );
+
+    controller.setChatUserMuted('friend', true);
+
+    expect(controller.chatMessages.single.username, 'other');
+    expect(controller.unreadChatCount, 0);
+    expect(controller.unreadMentionCount, 0);
+    await controller.dispose();
+  });
+
+  test('muting removes only that user from precise unread tracking', () async {
+    final controller = _controller();
+    controller.appendUserMessage(
+      username: 'friend',
+      message: '@me hidden',
+      fromRemote: true,
+      mentionsSelf: true,
+    );
+    controller.appendUserMessage(
+      username: 'other',
+      message: 'keep unread',
+      fromRemote: true,
+    );
+    expect(controller.unreadChatCount, 2);
+    expect(controller.unreadMentionCount, 1);
+
+    controller.setChatUserMuted('friend', true);
+
+    expect(controller.chatMessages.single.username, 'other');
+    expect(controller.unreadChatCount, 1);
+    expect(controller.unreadMentionCount, 0);
+    await controller.dispose();
+  });
+
+  test('retry without a pending request cannot stay reconnecting', () async {
+    final controller = _controller();
+    controller.connectionState = SyncPlayConnectionState.reconnecting;
+
+    await controller.retryConnection();
+
+    expect(controller.connectionState, SyncPlayConnectionState.failed);
+    await controller.dispose();
+  });
+
   test('message grouping requires same user and a one-minute window', () {
     final first = SyncPlayChatMessage(
       id: 1,
@@ -251,7 +308,7 @@ void main() {
     expect(controller.chatMessages, hasLength(300));
     expect(controller.chatMessages.first.message, '1');
     expect(controller.chatMessages.last.message, '300');
-    expect(controller.unreadChatCount, 301);
+    expect(controller.unreadChatCount, 300);
     await controller.dispose();
   });
 

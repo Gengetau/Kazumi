@@ -354,9 +354,7 @@ class _VideoPageState extends State<VideoPage>
         ? videoPageController.showTabBody && _tabBodyTargetVisible
         : videoPageController.showTabBody && !videoPageController.isFullscreen;
     playerController.syncplay.setChatVisible(
-      chatTabVisible &&
-          contentVisible &&
-          !videoPageController.isPip,
+      chatTabVisible && contentVisible && !videoPageController.isPip,
     );
   }
 
@@ -782,14 +780,22 @@ class _VideoPageState extends State<VideoPage>
         color: Theme.of(context).canvasColor,
         child: (isDesktop() || isTablet())
             ? tabBody
-            : GridViewObserver(
-                controller: observerController,
-                child: Column(
-                  children: [
-                    menuBar,
-                    menuBody,
-                  ],
-                ),
+            : AnimatedBuilder(
+                animation: tabController,
+                builder: (context, child) {
+                  if (tabController.index == 2) {
+                    return tabBody;
+                  }
+                  return GridViewObserver(
+                    controller: observerController,
+                    child: Column(
+                      children: [
+                        menuBar,
+                        menuBody,
+                      ],
+                    ),
+                  );
+                },
               ),
       ),
     );
@@ -1316,8 +1322,9 @@ class _VideoPageState extends State<VideoPage>
                   AnimatedBuilder(
                     animation: tabController,
                     builder: (context, child) {
-                      final hideForMobileChat =
-                          !isDesktop() && !isTablet() && tabController.index == 2;
+                      final hideForMobileChat = !isDesktop() &&
+                          !isTablet() &&
+                          tabController.index == 2;
                       if (hideForMobileChat) {
                         return const SizedBox.shrink();
                       }
@@ -1372,12 +1379,11 @@ class _VideoPageState extends State<VideoPage>
                     controller: playerController.syncplay,
                     onSend: playerController.trySendSyncPlayChatMessage,
                     inviteTextBuilder: playerController.syncPlayInviteText,
-                    compact: compactTabs && !isDesktop() && !isTablet(),
+                    compact: !isDesktop() && !isTablet(),
                     globalDanmakuEnabled: danmakuOn,
                     onEnableGlobalDanmaku: enableGlobalDanmakuForChat,
                     onReconnect: playerController.syncplay.retryConnection,
-                    onClearHistory:
-                        playerController.syncplay.clearChatHistory,
+                    onClearHistory: playerController.syncplay.clearChatHistory,
                   ),
                 ],
               ),

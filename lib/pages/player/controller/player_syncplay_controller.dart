@@ -88,7 +88,10 @@ abstract class _PlayerSyncPlayController with Store {
   Future<void> Function(int episode, {int currentRoad, int offset})?
       _changeEpisode;
   bool _connectionLossHandled = false;
+  Future<void>? _retryFuture;
   int _nextChatMessageId = 1;
+  final Set<int> _unreadChatMessageIds = <int>{};
+  final Set<int> _unreadMentionMessageIds = <int>{};
 
   static const int maxChatMessages = 300;
   static const int maxChatMessageLength = 500;
@@ -184,13 +187,12 @@ abstract class _PlayerSyncPlayController with Store {
     if (fromRemote && validUsername && isChatUserMuted(username)) {
       return;
     }
-    final effectiveType = type == SyncPlayChatMessageType.user &&
-            (!validUsername || !hasText)
-        ? SyncPlayChatMessageType.system
-        : type;
-    final safeUsername = validUsername
-        ? normalizeSyncPlayUsername(username)
-        : '系统';
+    final effectiveType =
+        type == SyncPlayChatMessageType.user && (!validUsername || !hasText)
+            ? SyncPlayChatMessageType.system
+            : type;
+    final safeUsername =
+        validUsername ? normalizeSyncPlayUsername(username) : '系统';
     final effectiveMention = effectiveType == SyncPlayChatMessageType.user &&
         (mentionsSelf ?? _messageMentionsCurrentUser(message));
     final chatMessage = SyncPlayChatMessage(
@@ -204,16 +206,19 @@ abstract class _PlayerSyncPlayController with Store {
     );
     chatMessages.add(chatMessage);
     while (chatMessages.length > maxChatMessages) {
-      chatMessages.removeAt(0);
+      final removed = chatMessages.removeAt(0);
+      _unreadChatMessageIds.remove(removed.id);
+      _unreadMentionMessageIds.remove(removed.id);
     }
     if (effectiveType == SyncPlayChatMessageType.user &&
         fromRemote &&
         !chatVisible) {
-      unreadChatCount++;
+      _unreadChatMessageIds.add(chatMessage.id);
       if (effectiveMention) {
-        unreadMentionCount++;
+        _unreadMentionMessageIds.add(chatMessage.id);
       }
     }
+    _syncUnreadCounts();
     if (effectiveType == SyncPlayChatMessageType.user) {
       _chatStreamController.add(chatMessage);
     }
@@ -235,8 +240,7 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void _updateChatVisibility() {
-    final visible =
-        _chatVisibilityRequested && appForeground && windowFocused;
+    final visible = _chatVisibilityRequested && appForeground && windowFocused;
     chatVisible = visible;
     if (visible) {
       markChatRead();
@@ -244,14 +248,18 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void markChatRead() {
-    unreadChatCount = 0;
-    unreadMentionCount = 0;
+    _clearUnreadTracking();
+  }
+
+  void _clearUnreadTracking() {
+    _unreadChatMessageIds.clear();
+    _unreadMentionMessageIds.clear();
+    _syncUnreadCounts();
   }
 
   void clearChatSession() {
     chatMessages.clear();
-    unreadChatCount = 0;
-    unreadMentionCount = 0;
+    _clearUnreadTracking();
     mutedChatUsers.clear();
     _activeChatRoom = '';
   }
@@ -259,8 +267,7 @@ abstract class _PlayerSyncPlayController with Store {
   /// Clears messages without leaving the currently joined room.
   void clearChatHistory() {
     chatMessages.clear();
-    unreadChatCount = 0;
-    unreadMentionCount = 0;
+    _clearUnreadTracking();
     mutedChatUsers.clear();
   }
 
@@ -276,13 +283,21 @@ abstract class _PlayerSyncPlayController with Store {
     final safeName = normalizeSyncPlayUsername(username);
     if (muted) {
       mutedChatUsers.add(safeName);
+      final removedIds = chatMessages
+          .where(
+            (message) =>
+                message.type == SyncPlayChatMessageType.user &&
+                message.fromRemote &&
+                message.username == safeName,
+          )
+          .map((message) => message.id)
+          .toSet();
       chatMessages.removeWhere(
-        (message) =>
-            message.type == SyncPlayChatMessageType.user &&
-            message.fromRemote &&
-            message.username == safeName,
+        (message) => removedIds.contains(message.id),
       );
-      _recalculateUnread();
+      _unreadChatMessageIds.removeAll(removedIds);
+      _unreadMentionMessageIds.removeAll(removedIds);
+      _syncUnreadCounts();
     } else {
       mutedChatUsers.remove(safeName);
     }
@@ -294,7 +309,7 @@ abstract class _PlayerSyncPlayController with Store {
 
   String get unreadChatLabel {
     if (unreadMentionCount > 0) {
-      return '@$unreadMentionCount';
+      return '@${unreadMentionCount > 99 ? '99+' : unreadMentionCount}';
     }
     return unreadChatCount > 99 ? '99+' : '$unreadChatCount';
   }
@@ -304,20 +319,9 @@ abstract class _PlayerSyncPlayController with Store {
     return syncPlayMessageMentionsUsername(message, username);
   }
 
-  void _recalculateUnread() {
-    var unread = 0;
-    var mentions = 0;
-    for (final message in chatMessages) {
-      if (message.type == SyncPlayChatMessageType.user &&
-          message.fromRemote) {
-        unread++;
-        if (message.mentionsSelf) {
-          mentions++;
-        }
-      }
-    }
-    unreadChatCount = unread;
-    unreadMentionCount = mentions;
+  void _syncUnreadCounts() {
+    unreadChatCount = _unreadChatMessageIds.length;
+    unreadMentionCount = _unreadMentionMessageIds.length;
   }
 
   void setChatDanmakuEnabled(bool enabled) {
@@ -563,12 +567,30 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   /// Repeats the last requested room using the existing session's history.
-  Future<void> retryConnection() async {
+  Future<void> retryConnection() {
+    final activeRetry = _retryFuture;
+    if (activeRetry != null) {
+      return activeRetry;
+    }
+    final retry = _retryConnectionOnce();
+    _retryFuture = retry;
+    return retry.whenComplete(() {
+      if (identical(_retryFuture, retry)) {
+        _retryFuture = null;
+      }
+    });
+  }
+
+  Future<void> _retryConnectionOnce() async {
     final room = _requestedChatRoom;
     final username = _requestedUsername;
     final changeEpisode = _changeEpisode;
-    if (room.isEmpty || changeEpisode == null ||
+    if (room.isEmpty ||
+        changeEpisode == null ||
         connectionState == SyncPlayConnectionState.disconnected) {
+      if (connectionState != SyncPlayConnectionState.disconnected) {
+        connectionState = SyncPlayConnectionState.failed;
+      }
       return;
     }
     await createRoom(
@@ -603,14 +625,23 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayRoom = '';
     syncplayClientRtt = 0;
     connectionState = SyncPlayConnectionState.reconnecting;
+    appendSystemMessage('连接已中断');
     await client.disconnect();
     KazumiDialog.showToast(
-      message: 'SyncPlay: 同步中断 $error',
-      duration: const Duration(seconds: 5),
-      showActionButton: true,
-      actionLabel: '重新连接',
-      onActionPressed: retryConnection,
+      message: 'SyncPlay: 同步中断，正在重新连接',
+      duration: const Duration(seconds: 3),
     );
+    await retryConnection();
+    if (connectionState == SyncPlayConnectionState.connected) {
+      appendSystemMessage('已重新连接');
+      KazumiDialog.showToast(
+        message: 'SyncPlay: 已重新连接',
+        duration: const Duration(seconds: 3),
+      );
+    } else if (connectionState != SyncPlayConnectionState.disconnected &&
+        connectionState != SyncPlayConnectionState.failed) {
+      connectionState = SyncPlayConnectionState.failed;
+    }
   }
 
   bool _isCurrentConnection(AsyncSession session, SyncplayClient client) {
