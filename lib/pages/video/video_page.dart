@@ -30,6 +30,7 @@ import 'package:kazumi/services/player/timed_shutdown_service.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_room_notice.dart';
 import 'package:mobx/mobx.dart' as mobx;
 
 class VideoPage extends StatefulWidget {
@@ -57,6 +58,7 @@ class VideoPage extends StatefulWidget {
 class _VideoPageState extends State<VideoPage>
     with TickerProviderStateMixin, WindowListener, WidgetsBindingObserver {
   PlayerController get playerController => widget.playerController;
+  SyncPlayRoomSessionController get roomSession => widget.roomSession;
   VideoPageController get videoPageController => widget.videoPageController;
   bool _didInitializePlayback = false;
   bool _isClosing = false;
@@ -83,6 +85,7 @@ class _VideoPageState extends State<VideoPage>
   late final bool disableAnimations;
 
   StreamSubscription<SyncPlayChatMessage>? _syncChatSubscription;
+  StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
   late final mobx.ReactionDisposer _pipModeListener;
 
   static const Duration _offlinePlayerInitDelay = Duration(milliseconds: 400);
@@ -128,6 +131,48 @@ class _VideoPageState extends State<VideoPage>
         syncChatVisibility();
       },
     );
+    _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
+  }
+
+  void _handleRoomNotice(SyncPlayRoomNotice notice) {
+    if (!mounted) {
+      return;
+    }
+    switch (notice) {
+      case SyncPlayRoomConnectionFailed(:final message):
+        KazumiDialog.showToast(
+          message: 'SyncPlay: $message',
+          duration: const Duration(seconds: 5),
+          showActionButton: true,
+          actionLabel: '重新连接',
+          onActionPressed: roomSession.retryConnection,
+        );
+      case SyncPlayRoomReconnecting():
+        KazumiDialog.showToast(
+          message: 'SyncPlay: 同步中断，正在重新连接',
+          duration: const Duration(seconds: 3),
+        );
+      case SyncPlayRoomReconnected():
+        KazumiDialog.showToast(
+          message: 'SyncPlay: 已重新连接',
+          duration: const Duration(seconds: 3),
+        );
+      case SyncPlayRoomInitialSync(:final username):
+        if (username.isEmpty) {
+          KazumiDialog.showToast(
+            message: 'SyncPlay: 您是当前房间中的唯一用户',
+            duration: const Duration(seconds: 5),
+          );
+        } else {
+          KazumiDialog.showToast(
+            message: 'SyncPlay: 您不是当前房间中的唯一用户, 当前以用户 $username 进度为准',
+          );
+        }
+      case SyncPlayRoomRemoteMediaChanged():
+        // PR1 keeps media events UI-neutral.  A future room page can render a
+        // mismatch or follow prompt without changing the player lifecycle.
+        break;
+    }
   }
 
   bool get _windowIsLandscape {
@@ -272,6 +317,9 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     try {
       _syncChatSubscription?.cancel();
+    } catch (_) {}
+    try {
+      _syncNoticeSubscription?.cancel();
     } catch (_) {}
     try {
       _logSubscription?.cancel();

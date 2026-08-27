@@ -2,7 +2,6 @@
 
 import 'dart:async';
 
-import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -11,6 +10,7 @@ import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_media_codec.dart';
 import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
+import 'package:kazumi/services/player/syncplay_room_notice.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:mobx/mobx.dart';
 
@@ -168,6 +168,11 @@ abstract class _PlayerSyncPlayController with Store {
   Stream<SyncPlayRoomMediaEvent> get mediaEvents =>
       _mediaEventStreamController.stream;
 
+  final StreamController<SyncPlayRoomNotice> _noticeStreamController =
+      StreamController<SyncPlayRoomNotice>.broadcast();
+
+  Stream<SyncPlayRoomNotice> get notices => _noticeStreamController.stream;
+
   Future<void> _restorePlaybackAttachment(
     SyncPlayPlaybackAttachment attachment,
   ) async {
@@ -236,6 +241,12 @@ abstract class _PlayerSyncPlayController with Store {
   void _emitMediaEvent(SyncPlayRoomMediaEvent event) {
     if (!_mediaEventStreamController.isClosed) {
       _mediaEventStreamController.add(event);
+    }
+  }
+
+  void _emitNotice(SyncPlayRoomNotice notice) {
+    if (!_noticeStreamController.isClosed) {
+      _noticeStreamController.add(notice);
     }
   }
 
@@ -502,11 +513,8 @@ abstract class _PlayerSyncPlayController with Store {
       _finishFailedConnection(
         session,
       );
-      KazumiDialog.showToast(
-        message: 'SyncPlay: 服务器地址不合法 $syncPlayEndPoint',
-        showActionButton: true,
-        actionLabel: '重新连接',
-        onActionPressed: retryConnection,
+      _emitNotice(
+        SyncPlayRoomConnectionFailed('服务器地址不合法 $syncPlayEndPoint'),
       );
       KazumiLogger().e('SyncPlay: invalid server address $syncPlayEndPoint');
       return;
@@ -541,15 +549,11 @@ abstract class _PlayerSyncPlayController with Store {
             return;
           }
           if (message['type'] == 'init') {
-            if (message['username'] == '') {
-              KazumiDialog.showToast(
-                  message: 'SyncPlay: 您是当前房间中的唯一用户',
-                  duration: const Duration(seconds: 5));
+            final username = message['username'];
+            final initialUsername = username is String ? username : '';
+            _emitNotice(SyncPlayRoomInitialSync(initialUsername));
+            if (initialUsername.isEmpty) {
               setPlayingBangumi();
-            } else {
-              KazumiDialog.showToast(
-                  message:
-                      'SyncPlay: 您不是当前房间中的唯一用户, 当前以用户 ${message['username']} 进度为准');
             }
           }
           if (message['type'] == 'left') {
@@ -647,13 +651,7 @@ abstract class _PlayerSyncPlayController with Store {
       await _disconnect(clearChatSession: false, client: client);
       connectionState = SyncPlayConnectionState.failed;
       final message = e is SyncplayException ? e.message : e.toString();
-      KazumiDialog.showToast(
-        message: 'SyncPlay: 连接失败 $message',
-        duration: const Duration(seconds: 5),
-        showActionButton: true,
-        actionLabel: '重新连接',
-        onActionPressed: retryConnection,
-      );
+      _emitNotice(SyncPlayRoomConnectionFailed('连接失败 $message'));
     }
   }
 
@@ -714,18 +712,12 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayClientRtt = 0;
     connectionState = SyncPlayConnectionState.reconnecting;
     appendSystemMessage('连接已中断');
+    _emitNotice(SyncPlayRoomReconnecting());
     await client.disconnect();
-    KazumiDialog.showToast(
-      message: 'SyncPlay: 同步中断，正在重新连接',
-      duration: const Duration(seconds: 3),
-    );
     await retryConnection();
     if (connectionState == SyncPlayConnectionState.connected) {
       appendSystemMessage('已重新连接');
-      KazumiDialog.showToast(
-        message: 'SyncPlay: 已重新连接',
-        duration: const Duration(seconds: 3),
-      );
+      _emitNotice(SyncPlayRoomReconnected());
     } else if (connectionState != SyncPlayConnectionState.disconnected &&
         connectionState != SyncPlayConnectionState.failed) {
       connectionState = SyncPlayConnectionState.failed;
@@ -801,6 +793,7 @@ abstract class _PlayerSyncPlayController with Store {
     );
     currentMedia = media;
     _emitMediaEvent(SyncPlayRoomMediaChanged(media));
+    _emitNotice(SyncPlayRoomRemoteMediaChanged(media));
 
     final binding = _playbackBinding;
     if (binding == null || binding.bangumiId != media.bangumiId) {
@@ -982,5 +975,6 @@ abstract class _PlayerSyncPlayController with Store {
     chatMessages.clear();
     await _chatStreamController.close();
     await _mediaEventStreamController.close();
+    await _noticeStreamController.close();
   }
 }
