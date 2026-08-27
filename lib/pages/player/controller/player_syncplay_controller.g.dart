@@ -57,6 +57,54 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     });
   }
 
+  late final _$currentMediaAtom =
+      Atom(name: '_PlayerSyncPlayController.currentMedia', context: context);
+
+  @override
+  SyncPlayRoomMedia? get currentMedia {
+    _$currentMediaAtom.reportRead();
+    return super.currentMedia;
+  }
+
+  @override
+  set currentMedia(SyncPlayRoomMedia? value) {
+    _$currentMediaAtom.reportWrite(value, super.currentMedia, () {
+      super.currentMedia = value;
+    });
+  }
+
+  late final _$localMediaStatusAtom = Atom(
+      name: '_PlayerSyncPlayController.localMediaStatus', context: context);
+
+  @override
+  SyncPlayLocalMediaStatus get localMediaStatus {
+    _$localMediaStatusAtom.reportRead();
+    return super.localMediaStatus;
+  }
+
+  @override
+  set localMediaStatus(SyncPlayLocalMediaStatus value) {
+    _$localMediaStatusAtom.reportWrite(value, super.localMediaStatus, () {
+      super.localMediaStatus = value;
+    });
+  }
+
+  late final _$localMediaErrorAtom =
+      Atom(name: '_PlayerSyncPlayController.localMediaError', context: context);
+
+  @override
+  String? get localMediaError {
+    _$localMediaErrorAtom.reportRead();
+    return super.localMediaError;
+  }
+
+  @override
+  set localMediaError(String? value) {
+    _$localMediaErrorAtom.reportWrite(value, super.localMediaError, () {
+      super.localMediaError = value;
+    });
+  }
+
   late final _$connectionStateAtom =
       Atom(name: '_PlayerSyncPlayController.connectionState', context: context);
 
@@ -169,6 +217,20 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     });
   }
 
+  late final _$_PlayerSyncPlayControllerActionController =
+      ActionController(name: '_PlayerSyncPlayController', context: context);
+
+  @override
+  void setLocalMediaStatus(SyncPlayLocalMediaStatus status, {String? error}) {
+    final _$actionInfo = _$_PlayerSyncPlayControllerActionController.startAction(
+        name: '_PlayerSyncPlayController.setLocalMediaStatus');
+    try {
+      return super.setLocalMediaStatus(status, error: error);
+    } finally {
+      _$_PlayerSyncPlayControllerActionController.endAction(_$actionInfo);
+    }
+  }
+
   late final _$exitRoomAsyncAction =
       AsyncAction('_PlayerSyncPlayController.exitRoom', context: context);
 
@@ -183,6 +245,9 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
 syncplayController: ${syncplayController},
 syncplayRoom: ${syncplayRoom},
 syncplayClientRtt: ${syncplayClientRtt},
+currentMedia: ${currentMedia},
+localMediaStatus: ${localMediaStatus},
+localMediaError: ${localMediaError},
 connectionState: ${connectionState},
 unreadChatCount: ${unreadChatCount},
 unreadMentionCount: ${unreadMentionCount},

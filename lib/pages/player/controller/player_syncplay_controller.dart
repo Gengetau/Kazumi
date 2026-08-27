@@ -8,6 +8,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/services/player/syncplay_media_codec.dart';
 import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
@@ -22,6 +23,22 @@ typedef SyncplayClientFactory = SyncplayClient Function({
   required int port,
 });
 
+const Duration _roomMediaSelectionTimeout = Duration(seconds: 10);
+
+final class _PendingRoomMediaSelection {
+  _PendingRoomMediaSelection({
+    required this.token,
+    required this.bangumiId,
+    required this.episode,
+  });
+
+  final int token;
+  final int bangumiId;
+  final int episode;
+  final Completer<bool> completer = Completer<bool>();
+  Timer? timeout;
+}
+
 class PlayerSyncPlayController = _PlayerSyncPlayController
     with _$PlayerSyncPlayController;
 
@@ -29,11 +46,14 @@ abstract class _PlayerSyncPlayController with Store {
   _PlayerSyncPlayController({
     SyncplayClientFactory? clientFactory,
     @visibleForTesting String Function()? endpointProvider,
+    @visibleForTesting Duration? mediaSelectionTimeout,
   })
       : _clientFactory = clientFactory ??
             (({required String host, required int port}) =>
                 SyncplayClient(host: host, port: port)),
-        _endpointProvider = endpointProvider;
+        _endpointProvider = endpointProvider,
+        _mediaSelectionTimeout =
+            mediaSelectionTimeout ?? _roomMediaSelectionTimeout;
 
   final SyncplayClientFactory _clientFactory;
 
@@ -41,6 +61,7 @@ abstract class _PlayerSyncPlayController with Store {
   /// deterministic endpoint while using a fake client, without touching
   /// Hive-backed application settings or a real socket.
   final String Function()? _endpointProvider;
+  final Duration _mediaSelectionTimeout;
 
   /// Set before the socket opens and cleared on teardown, so unlike
   /// [syncplayRoom] it also covers the window where the connection is still
@@ -102,9 +123,30 @@ abstract class _PlayerSyncPlayController with Store {
   @observable
   SyncPlayRoomMedia? currentMedia;
 
+  /// Local video-source resolution/loading state. This is never encoded into
+  /// SyncPlay protocol messages or broadcast as room media.
+  @observable
+  SyncPlayLocalMediaStatus localMediaStatus =
+      SyncPlayLocalMediaStatus.idle;
+
+  /// A local resolution error, if [localMediaStatus] is [failed].
+  @observable
+  String? localMediaError;
+
   int _mediaGeneration = 0;
 
+  int _mediaSelectionToken = 0;
+  _PendingRoomMediaSelection? _pendingMediaSelection;
+
   int get mediaGeneration => _mediaGeneration;
+
+  /// Playback controls are currently available to every connected room
+  /// member. Host/permission semantics are intentionally deferred.
+  bool get canControlPlayback => true;
+
+  /// Media selection is currently available to every connected room member.
+  /// The picker and playback route will consume this seam later.
+  bool get canSelectRoomMedia => true;
 
   final ObservableList<SyncPlayChatMessage> chatMessages =
       ObservableList<SyncPlayChatMessage>();
@@ -176,6 +218,65 @@ abstract class _PlayerSyncPlayController with Store {
     _lastConfirmedProtocolPaused = null;
     _lastPlaybackNoticeFingerprint = null;
     _lastPlaybackNoticeAt = null;
+  }
+
+  /// Updates media resolution state owned by this device.
+  ///
+  /// This setter is intentionally independent from [currentMedia]: the
+  /// latter only changes after an authoritative server broadcast.
+  @action
+  void setLocalMediaStatus(SyncPlayLocalMediaStatus status, {String? error}) {
+    localMediaStatus = status;
+    localMediaError = status == SyncPlayLocalMediaStatus.failed ? error : null;
+  }
+
+  bool _isCurrentMediaSelection(_PendingRoomMediaSelection selection) {
+    return identical(_pendingMediaSelection, selection) &&
+        selection.token == _mediaSelectionToken;
+  }
+
+  void _completeMediaSelection(
+    _PendingRoomMediaSelection selection,
+    bool result,
+  ) {
+    if (!_isCurrentMediaSelection(selection)) {
+      return;
+    }
+    selection.timeout?.cancel();
+    selection.timeout = null;
+    _pendingMediaSelection = null;
+    if (!selection.completer.isCompleted) {
+      selection.completer.complete(result);
+    }
+  }
+
+  void _cancelMediaSelection() {
+    final selection = _pendingMediaSelection;
+    if (selection == null) {
+      return;
+    }
+    selection.timeout?.cancel();
+    selection.timeout = null;
+    _pendingMediaSelection = null;
+    _mediaSelectionToken++;
+    if (!selection.completer.isCompleted) {
+      selection.completer.complete(false);
+    }
+  }
+
+  void _failMediaSelection(
+    _PendingRoomMediaSelection selection,
+    String reason,
+  ) {
+    if (!_isCurrentMediaSelection(selection)) {
+      return;
+    }
+    KazumiLogger().w('SyncPlay: room media selection failed: $reason');
+    _completeMediaSelection(selection, false);
+  }
+
+  void _onMediaSelectionTimeout(_PendingRoomMediaSelection selection) {
+    _failMediaSelection(selection, '等待服务器确认媒体超时');
   }
 
   String get activeChatRoom => _activeChatRoom;
@@ -316,9 +417,11 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void _clearRoomPlaybackState() {
+    _cancelMediaSelection();
     _playbackSnapshot = null;
     currentMedia = null;
     _mediaGeneration = 0;
+    setLocalMediaStatus(SyncPlayLocalMediaStatus.idle);
     resetPlaybackNoticeBaseline();
   }
 
@@ -580,6 +683,7 @@ abstract class _PlayerSyncPlayController with Store {
     if (_connectionSessions.isClosed) {
       return;
     }
+    _cancelMediaSelection();
     _requestedChatRoom = room;
     _requestedUsername = username;
     final session = _connectionSessions.begin();
@@ -745,6 +849,7 @@ abstract class _PlayerSyncPlayController with Store {
         return;
       }
       await _disconnect(clearChatSession: false, client: client);
+      _cancelMediaSelection();
       connectionState = SyncPlayConnectionState.failed;
       final message = e is SyncplayException ? e.message : e.toString();
       _emitNotice(SyncPlayRoomConnectionFailed('连接失败 $message'));
@@ -787,6 +892,7 @@ abstract class _PlayerSyncPlayController with Store {
     if (!session.isActive) {
       return;
     }
+    _cancelMediaSelection();
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
@@ -803,6 +909,7 @@ abstract class _PlayerSyncPlayController with Store {
     }
     _connectionLossHandled = true;
     _connectionSessions.cancel();
+    _cancelMediaSelection();
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
@@ -933,6 +1040,15 @@ abstract class _PlayerSyncPlayController with Store {
       generation: ++_mediaGeneration,
     );
     currentMedia = media;
+    final pendingSelection = _pendingMediaSelection;
+    if (pendingSelection != null) {
+      if (pendingSelection.bangumiId == media.bangumiId &&
+          pendingSelection.episode == media.episode) {
+        _completeMediaSelection(pendingSelection, true);
+      } else {
+        _failMediaSelection(pendingSelection, '房间媒体已被其他选择覆盖');
+      }
+    }
     _emitMediaEvent(SyncPlayRoomMediaChanged(media));
     _emitNotice(SyncPlayRoomRemoteMediaChanged(media));
 
@@ -1040,6 +1156,139 @@ abstract class _PlayerSyncPlayController with Store {
     });
   }
 
+  /// Requests a new room media choice and waits for the server's file
+  /// broadcast to confirm it. The room's [currentMedia] and generation are
+  /// never changed by this local request.
+  Future<bool> selectRoomMedia({
+    required int bangumiId,
+    required int episode,
+  }) async {
+    // A later request must invalidate an earlier wait even when its own
+    // arguments are invalid. Otherwise the old operation could eventually
+    // affect the newer request.
+    _cancelMediaSelection();
+    if (bangumiId <= 0 || episode <= 0) {
+      return false;
+    }
+
+    final client = syncplayController;
+    if (connectionState != SyncPlayConnectionState.connected ||
+        syncplayRoom.isEmpty ||
+        client == null ||
+        !client.isConnected) {
+      return false;
+    }
+
+    final selection = _PendingRoomMediaSelection(
+      token: ++_mediaSelectionToken,
+      bangumiId: bangumiId,
+      episode: episode,
+    );
+    _pendingMediaSelection = selection;
+    try {
+      final fileName = SyncPlayMediaCodec.encode(
+        bangumiId: bangumiId,
+        episode: episode,
+      );
+      await client.setSyncPlayPlaying(
+        fileName,
+        10800,
+        220514438,
+      );
+      if (!_isCurrentMediaSelection(selection)) {
+        return await selection.completer.future;
+      }
+
+      // The server receives a paused, zero-position state and must echo the
+      // resulting file before this request is considered successful.
+      client.setPaused(true);
+      client.setPosition(0);
+      await client.sendSyncPlaySyncRequest(doSeek: true);
+      if (!_isCurrentMediaSelection(selection)) {
+        return await selection.completer.future;
+      }
+      if (!client.isConnected) {
+        _failMediaSelection(selection, '聊天室连接已中断');
+        return await selection.completer.future;
+      }
+
+      selection.timeout = Timer(
+        _mediaSelectionTimeout,
+        () => _onMediaSelectionTimeout(selection),
+      );
+      return await selection.completer.future;
+    } catch (error, stackTrace) {
+      if (!_isCurrentMediaSelection(selection)) {
+        return await selection.completer.future;
+      }
+      final message = error is SyncplayException
+          ? error.message
+          : '发送房间媒体失败：$error';
+      KazumiLogger().w(
+        'SyncPlay: failed to select room media',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      _failMediaSelection(selection, message);
+      return await selection.completer.future;
+    }
+  }
+
+  String _configuredSyncPlayEndPoint() {
+    try {
+      final endpoint = _endpointProvider?.call() ??
+          GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
+      return endpoint.isEmpty ? defaultSyncPlayEndPoint : endpoint;
+    } catch (_) {
+      return defaultSyncPlayEndPoint;
+    }
+  }
+
+  /// Builds the shareable room invitation from app-scoped room state.
+  ///
+  /// Media ids are included only when the server has already broadcast a
+  /// valid room choice; a local player must not fabricate shared state.
+  String syncPlayInviteText({String? localTitle, int? localBangumiId}) {
+    final endpoint = _configuredSyncPlayEndPoint();
+    final room = syncplayRoom;
+    final media = currentMedia;
+    final safeTitle = media != null && localBangumiId == media.bangumiId
+        ? localTitle?.trim().replaceAll(RegExp(r'[\r\n]+'), ' ')
+        : null;
+    final viewing = media == null
+        ? '尚未选择'
+        : [
+            if (safeTitle != null && safeTitle.isNotEmpty) safeTitle,
+            'Bangumi #${media.bangumiId}',
+            '第 ${media.episode} 集',
+          ].join(' · ');
+
+    var uri = '';
+    if (room.isNotEmpty && media != null) {
+      try {
+        uri = SyncPlayInviteCodec.encode(
+          room: room,
+          server: endpoint,
+          episode: media.episode,
+          bangumi: media.bangumiId,
+        );
+      } catch (_) {
+        // The readable legacy body remains useful when a custom endpoint is
+        // not parseable by the versioned URI codec.
+      }
+    }
+
+    final mediaDetails = media == null
+        ? ''
+        : '番剧 ID：${media.bangumiId}\n剧集：第 ${media.episode} 集\n';
+    return '''Kazumi 一起看邀请
+房间：$room
+服务器：$endpoint
+当前观看：$viewing
+$mediaDetails${uri.isEmpty ? '' : '$uri\n'}
+打开 Kazumi → 聊天室 → 加入房间''';
+  }
+
   Future<void> requestSync({bool? doSeek}) async {
     final client = syncplayController;
     if (client == null) {
@@ -1098,6 +1347,11 @@ abstract class _PlayerSyncPlayController with Store {
   }) async {
     _connectionSessions.cancel();
     final controller = client ?? syncplayController;
+    if (clearChatSession ||
+        client == null ||
+        identical(syncplayController, client)) {
+      _cancelMediaSelection();
+    }
     if (client == null || identical(syncplayController, client)) {
       syncplayController = null;
       syncplayRoom = '';

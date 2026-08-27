@@ -13,9 +13,13 @@ Future<void> _settle([int turns = 5]) async {
   }
 }
 
-PlayerSyncPlayController _controllerFor(FakeSyncplayClient client) {
+PlayerSyncPlayController _controllerFor(
+  FakeSyncplayClient client, {
+  Duration? mediaSelectionTimeout,
+}) {
   return PlayerSyncPlayController(
     endpointProvider: () => 'localhost:8996',
+    mediaSelectionTimeout: mediaSelectionTimeout,
     clientFactory: ({required String host, required int port}) => client,
   );
 }
@@ -59,6 +63,137 @@ void main() {
       );
     }
   });
+
+  test('selects room media only after a matching server broadcast', () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+
+    expect(controller.canControlPlayback, isTrue);
+    expect(controller.canSelectRoomMedia, isTrue);
+    final selection = controller.selectRoomMedia(bangumiId: 12345, episode: 9);
+    await _settle();
+
+    expect(controller.currentMedia, isNull);
+    expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+    expect(client.operations, [
+      'setPlaying:12345[9]',
+      'paused:true',
+      'position:0.0',
+      'sync:true',
+    ]);
+
+    client.emitFileChanged(name: '12345[9]', setBy: 'alice');
+
+    expect(await selection, isTrue);
+    expect(controller.currentMedia!.generation, 1);
+    expect(controller.mediaGeneration, 1);
+    expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+    await _disposeController(controller, client);
+  });
+
+  test(
+    'rejects invalid room media selections without sending protocol data',
+    () async {
+      final client = FakeSyncplayClient();
+      final controller = _controllerFor(client);
+      await controller.createRoom('room-a', 'alice');
+
+      expect(
+        await controller.selectRoomMedia(bangumiId: 0, episode: 9),
+        isFalse,
+      );
+      expect(
+        await controller.selectRoomMedia(bangumiId: 12345, episode: 0),
+        isFalse,
+      );
+      expect(client.operations, isEmpty);
+      expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+      await _disposeController(controller, client);
+    },
+  );
+
+  test(
+    'local media source status is independent and clears for a new room',
+    () async {
+      final client = FakeSyncplayClient();
+      final controller = _controllerFor(client);
+      await controller.createRoom('room-a', 'alice');
+
+      controller.setLocalMediaStatus(SyncPlayLocalMediaStatus.resolving);
+      expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.resolving);
+      expect(controller.localMediaError, isNull);
+      controller.setLocalMediaStatus(
+        SyncPlayLocalMediaStatus.failed,
+        error: 'source unavailable',
+      );
+      expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.failed);
+      expect(controller.localMediaError, 'source unavailable');
+
+      controller.beginChatSession('room-b');
+
+      expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+      expect(controller.localMediaError, isNull);
+      await _disposeController(controller, client);
+    },
+  );
+
+  test('a newer room media selection invalidates the older wait', () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+
+    final first = controller.selectRoomMedia(bangumiId: 12345, episode: 9);
+    await _settle();
+    final second = controller.selectRoomMedia(bangumiId: 12345, episode: 10);
+    await _settle();
+
+    client.emitFileChanged(name: '12345[10]', setBy: 'alice');
+
+    expect(await first, isFalse);
+    expect(await second, isTrue);
+    expect(controller.currentMedia!.episode, 10);
+    expect(controller.mediaGeneration, 1);
+    await _disposeController(controller, client);
+  });
+
+  test('completes a pending room media selection on timeout', () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(
+      client,
+      mediaSelectionTimeout: const Duration(milliseconds: 1),
+    );
+    await controller.createRoom('room-a', 'alice');
+
+    expect(
+      await controller.selectRoomMedia(bangumiId: 12345, episode: 9),
+      isFalse,
+    );
+    expect(controller.currentMedia, isNull);
+    expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+    await _disposeController(controller, client);
+  });
+
+  test(
+    'completes a pending room media selection when leaving the room',
+    () async {
+      final client = FakeSyncplayClient();
+      final controller = _controllerFor(client);
+      await controller.createRoom('room-a', 'alice');
+      final selection = controller.selectRoomMedia(
+        bangumiId: 12345,
+        episode: 9,
+      );
+      await _settle();
+
+      await controller.exitRoom();
+
+      expect(await selection, isFalse);
+      expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+      expect(controller.localMediaError, isNull);
+      await _disposeController(controller, client);
+    },
+  );
 
   test('caches remote media while no player is attached', () async {
     final client = FakeSyncplayClient();

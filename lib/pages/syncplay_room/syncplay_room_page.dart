@@ -62,15 +62,6 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
     }
   }
 
-  String _inviteText() {
-    final room = roomSession.syncplayRoom;
-    return '''Kazumi 一起看邀请
-房间：$room
-服务器：${_endpoint()}
-
-打开 Kazumi → 一起看 → 加入房间''';
-  }
-
   String _connectionLabel(SyncPlayConnectionState state) {
     return switch (state) {
       SyncPlayConnectionState.disconnected => '未连接',
@@ -120,7 +111,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
     if (roomSession.syncplayRoom.isEmpty) {
       return;
     }
-    await Clipboard.setData(ClipboardData(text: _inviteText()));
+    await Clipboard.setData(
+      ClipboardData(text: roomSession.syncPlayInviteText()),
+    );
     if (!mounted) {
       return;
     }
@@ -305,7 +298,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
                   onJoinRoom: () => unawaited(_showJoinForm()),
                   onServerSettings: () => unawaited(_showServerForm()),
                   onRetry: roomSession.retryConnection,
-                  inviteTextBuilder: _inviteText,
+                  inviteTextBuilder: roomSession.syncPlayInviteText,
                 ),
                 if (connected) ...[
                   const SizedBox(height: 12),
@@ -320,7 +313,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
           child: SyncPlayChatView(
             controller: roomSession,
             onSend: roomSession.trySendChatMessage,
-            inviteTextBuilder: _inviteText,
+            inviteTextBuilder: roomSession.syncPlayInviteText,
             compact: true,
             onReconnect: roomSession.retryConnection,
             onClearHistory: roomSession.clearChatHistory,

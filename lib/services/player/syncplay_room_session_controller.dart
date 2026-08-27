@@ -17,8 +17,10 @@ class SyncPlayRoomSessionController
   SyncPlayRoomSessionController({
     SyncplayClientFactory? clientFactory,
     @visibleForTesting String Function()? endpointProvider,
+    @visibleForTesting Duration? mediaSelectionTimeout,
   }) : super(
           clientFactory: clientFactory,
           endpointProvider: endpointProvider,
+          mediaSelectionTimeout: mediaSelectionTimeout,
         );
 }

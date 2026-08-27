@@ -36,6 +36,14 @@ final class SyncPlayRoomMedia {
   });
 }
 
+/// Local-only status while this device resolves or loads a playable video
+/// source for the room's selected media.
+///
+/// This state describes work performed by this device. It is deliberately
+/// separate from [SyncPlayRoomMedia], which is only updated after the server
+/// broadcasts the room's authoritative file choice.
+enum SyncPlayLocalMediaStatus { idle, resolving, ready, failed }
+
 /// A media event observed by a page.  Session emits events; navigation and
 /// other UI decisions remain outside the service layer.
 sealed class SyncPlayRoomMediaEvent {

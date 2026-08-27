@@ -22,8 +22,6 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/services/player/audio_controller.dart';
-import 'package:kazumi/services/player/syncplay_endpoint.dart';
-import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -569,42 +567,12 @@ class PlayerController implements Disposable {
     await trySendSyncPlayChatMessage(message);
   }
 
-  String syncPlayInviteText() {
-    String endpoint = '';
-    try {
-      endpoint = GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
-    } catch (_) {}
-    if (endpoint.isEmpty) {
-      endpoint = defaultSyncPlayEndPoint;
-    }
-
-    final title = currentBangumiName.isNotEmpty ? currentBangumiName : '未知作品';
-    var episode = 0;
-    try {
-      episode = currentEpisode;
-    } catch (_) {}
-    // A requested room is not an invite until the server confirms it in
-    // Hello. Keeping this empty while connecting prevents sharing a room
-    // number that may have been rejected or renamed by the server.
-    final room = syncplay.syncplayRoom;
-    final uri = room.isNotEmpty && episode > 0 && currentBangumiId > 0
-        ? SyncPlayInviteCodec.encode(
-            room: room,
-            server: endpoint,
-            episode: episode,
-            bangumi: currentBangumiId,
-          )
-        : '';
-    return '''Kazumi 一起看邀请
-番剧：$title
-番剧 ID：$currentBangumiId
-剧集：第 $episode 集
-房间：$room
-服务器：$endpoint
-${uri.isEmpty ? '' : '$uri\n'}
-
-打开 Kazumi → 播放对应剧集 → 一起看 → 加入房间''';
-  }
+  /// Compatibility delegate; room semantics are owned by the shared
+  /// app-scoped session rather than this temporary player controller.
+  String syncPlayInviteText() => syncplay.syncPlayInviteText(
+        localTitle: currentBangumiName,
+        localBangumiId: currentBangumiId,
+      );
 
   Future<void> exitSyncPlayRoom() async {
     await syncplay.exitRoom();

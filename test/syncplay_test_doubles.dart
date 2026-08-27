@@ -42,6 +42,7 @@ class FakeSyncplayClient extends SyncplayClient {
   final List<double> positions = <double>[];
   final List<bool?> syncRequests = <bool?>[];
   final List<String> sentChatMessages = <String>[];
+  final List<String> operations = <String>[];
 
   @override
   bool get isConnected => connected;
@@ -104,6 +105,7 @@ class FakeSyncplayClient extends SyncplayClient {
     double duration,
     int size,
   ) async {
+    operations.add('setPlaying:$bangumiName');
     setPlayingNames.add(bangumiName);
     setPlayingDurations.add(duration);
     setPlayingSizes.add(size);
@@ -111,16 +113,19 @@ class FakeSyncplayClient extends SyncplayClient {
 
   @override
   Future<void> sendSyncPlaySyncRequest({bool? doSeek}) async {
+    operations.add('sync:$doSeek');
     syncRequests.add(doSeek);
   }
 
   @override
   void setPaused(bool paused) {
+    operations.add('paused:$paused');
     pausedValues.add(paused);
   }
 
   @override
   void setPosition(double position) {
+    operations.add('position:$position');
     positions.add(position);
   }
 
