@@ -8,6 +8,6 @@
 library;
 
 export 'package:kazumi/pages/player/controller/player_syncplay_controller.dart'
-    show PlayerSyncPlayController;
+    show PlayerSyncPlayController, SyncplayClientFactory;
 
 typedef SyncPlayRoomSessionController = PlayerSyncPlayController;

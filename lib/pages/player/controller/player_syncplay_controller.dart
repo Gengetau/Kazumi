@@ -8,87 +8,29 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_media_codec.dart';
+import 'package:kazumi/services/player/syncplay_playback_binding.dart';
+import 'package:kazumi/services/player/syncplay_room_models.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:mobx/mobx.dart';
 
 part 'player_syncplay_controller.g.dart';
 
+typedef SyncplayClientFactory = SyncplayClient Function({
+  required String host,
+  required int port,
+});
+
 class PlayerSyncPlayController = _PlayerSyncPlayController
     with _$PlayerSyncPlayController;
 
 abstract class _PlayerSyncPlayController with Store {
-  _PlayerSyncPlayController({
-    int Function()? bangumiId,
-    int Function()? currentEpisode,
-    int Function()? currentRoad,
-    bool Function()? playing,
-    Duration Function()? currentPosition,
-    Duration Function()? playerPosition,
-    Duration Function()? duration,
-    Future<void> Function({bool enableSync})? pause,
-    Future<void> Function({bool enableSync})? play,
-    Future<void> Function(Duration duration, {bool enableSync})? seek,
-  })  : bangumiId = bangumiId ?? _zeroInt,
-        currentEpisode = currentEpisode ?? _zeroInt,
-        currentRoad = currentRoad ?? _zeroInt,
-        playing = playing ?? _false,
-        currentPosition = currentPosition ?? _zeroDuration,
-        playerPosition = playerPosition ?? _zeroDuration,
-        duration = duration ?? _zeroDuration,
-        pause = pause ?? _noopPlayback,
-        play = play ?? _noopPlayback,
-        seek = seek ?? _noopSeek;
+  _PlayerSyncPlayController({SyncplayClientFactory? clientFactory})
+      : _clientFactory = clientFactory ??
+            ({required String host, required int port}) =>
+                SyncplayClient(host: host, port: port);
 
-  static int _zeroInt() => 0;
-
-  static bool _false() => false;
-
-  static Duration _zeroDuration() => Duration.zero;
-
-  static Future<void> _noopPlayback({bool enableSync = true}) async {}
-
-  static Future<void> _noopSeek(
-    Duration duration, {
-    bool enableSync = true,
-  }) async {}
-
-  // These callbacks are a short-lived compatibility bridge for the first
-  // ownership migration commit. They are replaced by an attachable binding in
-  // the next commit and are not used to own the session or its socket.
-  int Function() bangumiId;
-  int Function() currentEpisode;
-  int Function() currentRoad;
-  bool Function() playing;
-  Duration Function() currentPosition;
-  Duration Function() playerPosition;
-  Duration Function() duration;
-  Future<void> Function({bool enableSync}) pause;
-  Future<void> Function({bool enableSync}) play;
-  Future<void> Function(Duration duration, {bool enableSync}) seek;
-
-  void attachLegacyPlayback({
-    required int Function() bangumiId,
-    required int Function() currentEpisode,
-    required int Function() currentRoad,
-    required bool Function() playing,
-    required Duration Function() currentPosition,
-    required Duration Function() playerPosition,
-    required Duration Function() duration,
-    required Future<void> Function({bool enableSync}) pause,
-    required Future<void> Function({bool enableSync}) play,
-    required Future<void> Function(Duration duration, {bool enableSync}) seek,
-  }) {
-    this.bangumiId = bangumiId;
-    this.currentEpisode = currentEpisode;
-    this.currentRoad = currentRoad;
-    this.playing = playing;
-    this.currentPosition = currentPosition;
-    this.playerPosition = playerPosition;
-    this.duration = duration;
-    this.pause = pause;
-    this.play = play;
-    this.seek = seek;
-  }
+  final SyncplayClientFactory _clientFactory;
 
   /// Set before the socket opens and cleared on teardown, so unlike
   /// [syncplayRoom] it also covers the window where the connection is still
@@ -106,6 +48,53 @@ abstract class _PlayerSyncPlayController with Store {
       SyncPlayConnectionState.disconnected;
 
   bool get hasSession => syncplayController != null;
+
+  SyncPlayPlaybackBinding? _playbackBinding;
+  int _playbackBindingGeneration = 0;
+
+  /// The current binding generation. Primarily useful for diagnostics and
+  /// tests; callers must use [SyncPlayPlaybackAttachment] for detach.
+  int get playbackBindingGeneration => _playbackBindingGeneration;
+
+  bool get hasPlaybackBinding => _playbackBinding != null;
+
+  SyncPlayPlaybackBinding? get playbackBinding => _playbackBinding;
+
+  SyncPlayPlaybackAttachment attachPlayback(SyncPlayPlaybackBinding binding) {
+    final attachment = SyncPlayPlaybackAttachment(
+      generation: ++_playbackBindingGeneration,
+      binding: binding,
+    );
+    _playbackBinding = binding;
+    unawaited(_restorePlaybackAttachment(attachment));
+    return attachment;
+  }
+
+  void detachPlayback(SyncPlayPlaybackAttachment attachment) {
+    if (attachment.generation != _playbackBindingGeneration ||
+        !identical(attachment.binding, _playbackBinding)) {
+      return;
+    }
+    _playbackBinding = null;
+  }
+
+  bool _isCurrentPlayback(SyncPlayPlaybackAttachment attachment) {
+    return attachment.generation == _playbackBindingGeneration &&
+        identical(attachment.binding, _playbackBinding);
+  }
+
+  SyncPlayRoomPlaybackSnapshot? _playbackSnapshot;
+
+  SyncPlayRoomPlaybackSnapshot? get playbackSnapshot => _playbackSnapshot;
+
+  SyncPlayRoomPlaybackSnapshot? get roomPlaybackSnapshot => _playbackSnapshot;
+
+  @observable
+  SyncPlayRoomMedia? currentMedia;
+
+  int _mediaGeneration = 0;
+
+  int get mediaGeneration => _mediaGeneration;
 
   final ObservableList<SyncPlayChatMessage> chatMessages =
       ObservableList<SyncPlayChatMessage>();
@@ -134,8 +123,6 @@ abstract class _PlayerSyncPlayController with Store {
   String _activeChatRoom = '';
   String _requestedChatRoom = '';
   String _requestedUsername = '';
-  Future<void> Function(int episode, {int currentRoad, int offset})?
-      _changeEpisode;
   bool _connectionLossHandled = false;
   Future<void>? _retryFuture;
   int _nextChatMessageId = 1;
@@ -174,13 +161,98 @@ abstract class _PlayerSyncPlayController with Store {
 
   Stream<SyncPlayChatMessage> get chatStream => _chatStreamController.stream;
 
+  final StreamController<SyncPlayRoomMediaEvent>
+      _mediaEventStreamController =
+      StreamController<SyncPlayRoomMediaEvent>.broadcast();
+
+  Stream<SyncPlayRoomMediaEvent> get mediaEvents =>
+      _mediaEventStreamController.stream;
+
+  Future<void> _restorePlaybackAttachment(
+    SyncPlayPlaybackAttachment attachment,
+  ) async {
+    if (!_isCurrentPlayback(attachment)) {
+      return;
+    }
+    final binding = attachment.binding;
+    final media = currentMedia;
+    if (media != null) {
+      if (media.bangumiId != binding.bangumiId) {
+        _emitMediaEvent(
+          SyncPlayRoomMediaMismatch(
+            roomMedia: media,
+            localBangumiId: binding.bangumiId,
+          ),
+        );
+      } else if (media.episode != binding.currentEpisode) {
+        await binding.changeEpisodeFromRoom(media.episode);
+        if (!_isCurrentPlayback(attachment)) {
+          return;
+        }
+      }
+    }
+
+    final snapshot = _playbackSnapshot;
+    if (snapshot == null || !_isCurrentPlayback(attachment)) {
+      return;
+    }
+    await _applyPlaybackSnapshot(attachment, snapshot);
+  }
+
+  Future<void> _applyPlaybackSnapshot(
+    SyncPlayPlaybackAttachment attachment,
+    SyncPlayRoomPlaybackSnapshot snapshot,
+  ) async {
+    if (!_isCurrentPlayback(attachment)) {
+      return;
+    }
+    final binding = attachment.binding;
+    final elapsed = snapshot.paused
+        ? Duration.zero
+        : DateTime.now().difference(snapshot.receivedAt);
+    final compensated = snapshot.position +
+        (elapsed.isNegative ? Duration.zero : elapsed);
+    if (binding.duration > Duration.zero &&
+        (snapshot.doSeek ||
+            (binding.playerPosition - compensated).inMilliseconds.abs() >
+                1000)) {
+      await binding.seekFromRoom(compensated);
+      if (!_isCurrentPlayback(attachment)) {
+        return;
+      }
+    }
+    if (!_isCurrentPlayback(attachment)) {
+      return;
+    }
+    if (snapshot.paused) {
+      if (binding.playing) {
+        await binding.pauseFromRoom();
+      }
+    } else if (!binding.playing) {
+      await binding.playFromRoom();
+    }
+  }
+
+  void _emitMediaEvent(SyncPlayRoomMediaEvent event) {
+    if (!_mediaEventStreamController.isClosed) {
+      _mediaEventStreamController.add(event);
+    }
+  }
+
   void beginChatSession(String room, {bool preserveHistory = false}) {
     final shouldClear = !preserveHistory ||
         (_activeChatRoom.isNotEmpty && _activeChatRoom != room);
     if (shouldClear) {
       clearChatSession();
+      _clearRoomPlaybackState();
     }
     _activeChatRoom = room;
+  }
+
+  void _clearRoomPlaybackState() {
+    _playbackSnapshot = null;
+    currentMedia = null;
+    _mediaGeneration = 0;
   }
 
   void appendUserMessage({
@@ -397,17 +469,15 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   Future<void> createRoom(
-      String room,
-      String username,
-      Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode,
-      {bool preserveChatHistory = false}) async {
+    String room,
+    String username, {
+    bool preserveChatHistory = false,
+  }) async {
     if (_connectionSessions.isClosed) {
       return;
     }
     _requestedChatRoom = room;
     _requestedUsername = username;
-    _changeEpisode = changeEpisode;
     final session = _connectionSessions.begin();
     final reconnecting = preserveChatHistory ||
         connectionState == SyncPlayConnectionState.reconnecting;
@@ -442,7 +512,7 @@ abstract class _PlayerSyncPlayController with Store {
       return;
     }
     final enableTLS = isOfficialSyncPlayEndPoint(parsed);
-    final client = SyncplayClient(host: parsed.host, port: parsed.port);
+    final client = _clientFactory(host: parsed.host, port: parsed.port);
     syncplayController = client;
     try {
       await client.connect(enableTLS: enableTLS);
@@ -499,19 +569,7 @@ abstract class _PlayerSyncPlayController with Store {
           }
           KazumiLogger().i(
               'SyncPlay: file changed by ${message['setBy']}: ${message['name']}');
-          RegExp regExp = RegExp(r'(\d+)\[(\d+)\]');
-          Match? match = regExp.firstMatch(message['name']);
-          if (match != null) {
-            int bangumiID = int.tryParse(match.group(1) ?? '0') ?? 0;
-            int episode = int.tryParse(match.group(2) ?? '0') ?? 0;
-            if (bangumiID != 0 && episode != 0 && episode != currentEpisode()) {
-              KazumiDialog.showToast(
-                  message:
-                      'SyncPlay: ${message['setBy'] ?? 'unknown'} 切换到第 $episode 话',
-                  duration: const Duration(seconds: 3));
-              changeEpisode(episode, currentRoad: currentRoad());
-            }
-          }
+          _handleRemoteMediaChanged(message);
         },
       );
       client.onChatMessage.listen(
@@ -547,39 +605,23 @@ abstract class _PlayerSyncPlayController with Store {
           if (!_isCurrentConnection(session, client)) {
             return;
           }
-          syncplayClientRtt = (message['clientRtt'].toDouble() * 1000).toInt();
+          final binding = _playbackBinding;
+          final snapshot = _snapshotFromPositionMessage(message);
+          _playbackSnapshot = snapshot;
+          final attachment = binding == null
+              ? null
+              : SyncPlayPlaybackAttachment(
+                  generation: _playbackBindingGeneration,
+                  binding: binding,
+                );
+          final clientRtt = message['clientRtt'];
+          if (clientRtt is num) {
+            syncplayClientRtt = (clientRtt.toDouble() * 1000).toInt();
+          }
           KazumiLogger().i(
               'SyncPlay: position changed by ${message['setBy']}: [${DateTime.now().millisecondsSinceEpoch / 1000.0}] calculatedPosition ${message['calculatedPositon']} position: ${message['position']} doSeek: ${message['doSeek']} paused: ${message['paused']} clientRtt: ${message['clientRtt']} serverRtt: ${message['serverRtt']} fd: ${message['fd']}');
-          if (message['paused'] != !playing()) {
-            if (message['paused']) {
-              if (message['position'] != 0) {
-                KazumiDialog.showToast(
-                    message: 'SyncPlay: ${message['setBy'] ?? 'unknown'} 暂停了播放',
-                    duration: const Duration(seconds: 3));
-                pause(enableSync: false);
-              }
-            } else {
-              if (message['position'] != 0) {
-                KazumiDialog.showToast(
-                    message: 'SyncPlay: ${message['setBy'] ?? 'unknown'} 开始了播放',
-                    duration: const Duration(seconds: 3));
-                play(enableSync: false);
-              }
-            }
-          }
-          if ((((playerPosition().inMilliseconds -
-                              (message['calculatedPositon'].toDouble() * 1000)
-                                  .toInt())
-                          .abs() >
-                      1000) ||
-                  message['doSeek']) &&
-              duration().inMilliseconds > 0) {
-            seek(
-                Duration(
-                    milliseconds:
-                        (message['calculatedPositon'].toDouble() * 1000)
-                            .toInt()),
-                enableSync: false);
+          if (attachment != null) {
+            unawaited(_applyRemotePlaybackSnapshot(attachment, snapshot));
           }
         },
       );
@@ -633,9 +675,7 @@ abstract class _PlayerSyncPlayController with Store {
   Future<void> _retryConnectionOnce() async {
     final room = _requestedChatRoom;
     final username = _requestedUsername;
-    final changeEpisode = _changeEpisode;
     if (room.isEmpty ||
-        changeEpisode == null ||
         connectionState == SyncPlayConnectionState.disconnected) {
       if (connectionState != SyncPlayConnectionState.disconnected) {
         connectionState = SyncPlayConnectionState.failed;
@@ -645,7 +685,6 @@ abstract class _PlayerSyncPlayController with Store {
     await createRoom(
       room,
       username,
-      changeEpisode,
       preserveChatHistory: true,
     );
   }
@@ -697,30 +736,158 @@ abstract class _PlayerSyncPlayController with Store {
     return session.isActive && identical(syncplayController, client);
   }
 
-  void setCurrentPosition({bool? forceSyncPlaying, double? forceSyncPosition}) {
-    if (syncplayController == null) {
+  SyncPlayRoomPlaybackSnapshot _snapshotFromPositionMessage(
+    Map<String, dynamic> message,
+  ) {
+    final rawPosition = message['calculatedPositon'];
+    final fallbackPosition = message['position'];
+    final positionSeconds = rawPosition is num
+        ? rawPosition.toDouble()
+        : fallbackPosition is num
+            ? fallbackPosition.toDouble()
+            : 0.0;
+    final rawPaused = message['paused'];
+    final rawDoSeek = message['doSeek'];
+    final rawSetBy = message['setBy'];
+    return SyncPlayRoomPlaybackSnapshot(
+      paused: rawPaused is bool ? rawPaused : true,
+      position: Duration(
+        milliseconds:
+            (positionSeconds * 1000).round().clamp(0, 1 << 31).toInt(),
+      ),
+      setBy: rawSetBy is String ? rawSetBy : '',
+      doSeek: rawDoSeek is bool && rawDoSeek,
+      receivedAt: DateTime.now(),
+    );
+  }
+
+  Future<void> _applyRemotePlaybackSnapshot(
+    SyncPlayPlaybackAttachment attachment,
+    SyncPlayRoomPlaybackSnapshot snapshot,
+  ) async {
+    try {
+      await _applyPlaybackSnapshot(attachment, snapshot);
+    } catch (error, stackTrace) {
+      // A player can disappear between two generation checks if its native
+      // resources are being torn down. Keep that failure local to the stale
+      // remote event and never let it surface as an unhandled stream error.
+      if (_isCurrentPlayback(attachment)) {
+        KazumiLogger().w(
+          'SyncPlay: failed to apply remote playback state',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+  }
+
+  void _handleRemoteMediaChanged(Map<String, dynamic> message) {
+    final rawName = message['name'];
+    if (rawName is! String) {
       return;
     }
-    forceSyncPlaying ??= playing();
+    final reference = SyncPlayMediaCodec.tryParse(rawName);
+    if (reference == null) {
+      return;
+    }
+    final rawSetBy = message['setBy'];
+    final selectedBy = rawSetBy is String ? rawSetBy : '';
+    final media = SyncPlayRoomMedia(
+      bangumiId: reference.bangumiId,
+      episode: reference.episode,
+      selectedBy: selectedBy,
+      updatedAt: DateTime.now(),
+      generation: ++_mediaGeneration,
+    );
+    currentMedia = media;
+    _emitMediaEvent(SyncPlayRoomMediaChanged(media));
+
+    final binding = _playbackBinding;
+    if (binding == null || binding.bangumiId != media.bangumiId) {
+      if (binding != null) {
+        _emitMediaEvent(
+          SyncPlayRoomMediaMismatch(
+            roomMedia: media,
+            localBangumiId: binding.bangumiId,
+          ),
+        );
+      }
+      return;
+    }
+    if (binding.currentEpisode == media.episode) {
+      return;
+    }
+    final attachment = SyncPlayPlaybackAttachment(
+      generation: _playbackBindingGeneration,
+      binding: binding,
+    );
+    unawaited(_applyRemoteMediaChange(attachment, media));
+  }
+
+  Future<void> _applyRemoteMediaChange(
+    SyncPlayPlaybackAttachment attachment,
+    SyncPlayRoomMedia media,
+  ) async {
+    if (!_isCurrentPlayback(attachment) ||
+        attachment.binding.bangumiId != media.bangumiId ||
+        attachment.binding.currentEpisode == media.episode) {
+      return;
+    }
+    try {
+      await attachment.binding.changeEpisodeFromRoom(media.episode);
+      // The route may have detached or been replaced while episode loading
+      // was in flight.  Do not let a completed stale callback continue into
+      // any follow-up room state application.
+      if (!_isCurrentPlayback(attachment)) {
+        return;
+      }
+    } catch (error, stackTrace) {
+      if (_isCurrentPlayback(attachment)) {
+        KazumiLogger().w(
+          'SyncPlay: failed to follow remote episode',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+  }
+
+  void setCurrentPosition({bool? forceSyncPlaying, double? forceSyncPosition}) {
+    final binding = _playbackBinding;
+    if (syncplayController == null || binding == null) {
+      return;
+    }
+    forceSyncPlaying ??= binding.playing;
     syncplayController!.setPaused(!forceSyncPlaying);
     syncplayController!.setPosition((forceSyncPosition ??
-        (((currentPosition().inMilliseconds - playerPosition().inMilliseconds)
+        (((binding.currentPosition.inMilliseconds - binding.playerPosition.inMilliseconds)
                     .abs() >
                 2000)
-            ? currentPosition().inMilliseconds.toDouble() / 1000
-            : playerPosition().inMilliseconds.toDouble() / 1000)));
+            ? binding.currentPosition.inMilliseconds.toDouble() / 1000
+            : binding.playerPosition.inMilliseconds.toDouble() / 1000)));
   }
 
   Future<void> setPlayingBangumi(
       {bool? forceSyncPlaying, double? forceSyncPosition}) async {
     final client = syncplayController;
-    if (client == null) {
+    final binding = _playbackBinding;
+    if (client == null || binding == null) {
       return;
     }
+    final attachment = SyncPlayPlaybackAttachment(
+      generation: _playbackBindingGeneration,
+      binding: binding,
+    );
     await _runBestEffortSync(() async {
       await client.setSyncPlayPlaying(
-          "${bangumiId()}[${currentEpisode()}]", 10800, 220514438);
-      if (!identical(syncplayController, client)) {
+          SyncPlayMediaCodec.encode(
+            bangumiId: binding.bangumiId,
+            episode: binding.currentEpisode,
+          ),
+          10800,
+          220514438);
+      if (!identical(syncplayController, client) ||
+          !_isCurrentPlayback(attachment)) {
         return;
       }
       setCurrentPosition(
@@ -797,9 +964,9 @@ abstract class _PlayerSyncPlayController with Store {
     }
     if (clearChatSession) {
       this.clearChatSession();
+      _clearRoomPlaybackState();
       _requestedChatRoom = '';
       _requestedUsername = '';
-      _changeEpisode = null;
       _connectionLossHandled = true;
     } else if (systemMessage != null) {
       appendSystemMessage(systemMessage);
@@ -809,8 +976,11 @@ abstract class _PlayerSyncPlayController with Store {
 
   Future<void> dispose() async {
     _connectionSessions.close();
+    _playbackBinding = null;
+    _playbackBindingGeneration++;
     await exitRoom();
     chatMessages.clear();
     await _chatStreamController.close();
+    await _mediaEventStreamController.close();
   }
 }

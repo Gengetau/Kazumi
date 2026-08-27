@@ -13,8 +13,9 @@ import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_panel_controller.dart';
 import 'package:kazumi/pages/player/controller/player_playback_controller.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/pages/player/controller/player_syncplay_binding.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
@@ -33,21 +34,6 @@ class PlayerController implements Disposable {
     this.audioController,
     this.syncplay,
   ) {
-    // Compatibility bridge for the first app-scope migration commit. The
-    // following binding commit replaces this with attachPlayback and makes
-    // the lifetime explicit without passing player closures to construction.
-    syncplay.attachLegacyPlayback(
-      bangumiId: () => bangumiId,
-      currentEpisode: () => currentEpisode,
-      currentRoad: () => currentRoad,
-      playing: () => playback.playing,
-      currentPosition: () => playback.currentPosition,
-      playerPosition: () => playback.playerPosition,
-      duration: () => playback.duration,
-      pause: pause,
-      play: play,
-      seek: seek,
-    );
     danmaku = PlayerDanmakuController(
       isLocalPlayback: () => isLocalPlayback,
       downloadController: downloadController,
@@ -72,6 +58,35 @@ class PlayerController implements Disposable {
   /// A shared app-scoped room session.  PlayerController never disposes it;
   /// it only supplies temporary playback state while this route is active.
   final SyncPlayRoomSessionController syncplay;
+  late final PlayerSyncPlayBinding _syncplayBinding =
+      PlayerSyncPlayBinding(this);
+  SyncPlayPlaybackAttachment? _syncplayAttachment;
+  Future<void> Function(int episode, {int currentRoad, int offset})?
+      _changeEpisodeFromRoom;
+
+  int get currentBangumiId {
+    try {
+      return bangumiId;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int get currentPlaybackEpisode {
+    try {
+      return currentEpisode;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int get currentPlaybackRoad {
+    try {
+      return currentRoad;
+    } catch (_) {
+      return 0;
+    }
+  }
   late final PlayerSeekController seeking = PlayerSeekController(
     playback: playback,
     danmaku: danmaku,
@@ -285,6 +300,8 @@ class PlayerController implements Disposable {
 
     coverUrl = params.coverUrl;
 
+    _syncplayAttachment ??= syncplay.attachPlayback(_syncplayBinding);
+
     if (syncplay.syncplayController?.isConnected ?? false) {
       if (syncplay.syncplayController!.currentFileName !=
           "$bangumiId[$currentEpisode]") {
@@ -394,6 +411,11 @@ class PlayerController implements Disposable {
   /// method returns.
   void beginShutdown() {
     _initializations.close();
+    final attachment = _syncplayAttachment;
+    if (attachment != null) {
+      syncplay.detachPlayback(attachment);
+      _syncplayAttachment = null;
+    }
     if (_shutdownFuture != null) {
       return;
     }
@@ -472,11 +494,23 @@ class PlayerController implements Disposable {
       Future<void> Function(int episode, {int currentRoad, int offset})
           changeEpisode,
       {bool preserveChatHistory = false}) async {
+    _changeEpisodeFromRoom = changeEpisode;
     await syncplay.createRoom(
       room,
       username,
-      changeEpisode,
       preserveChatHistory: preserveChatHistory,
+    );
+  }
+
+  Future<void> changeEpisodeFromRoom(int episode) async {
+    final callback = _changeEpisodeFromRoom;
+    if (callback == null) {
+      return;
+    }
+    await callback(
+      episode,
+      currentRoad: currentPlaybackRoad,
+      offset: 0,
     );
   }
 
