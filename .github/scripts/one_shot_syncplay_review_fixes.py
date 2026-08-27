@@ -1,0 +1,566 @@
+from pathlib import Path
+
+
+def replace_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(
+            f"Expected exactly one match in {path}, found {count}:\n{old[:240]}"
+        )
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+video_page = Path("lib/pages/video/video_page.dart")
+replace_once(
+    video_page,
+    """      child: Container(
+        color: Theme.of(context).canvasColor,
+        child: (isDesktop() || isTablet())
+            ? tabBody
+            : GridViewObserver(
+                controller: observerController,
+                child: Column(
+                  children: [
+                    menuBar,
+                    menuBody,
+                  ],
+                ),
+              ),
+      ),
+""",
+    """      child: Container(
+        color: Theme.of(context).canvasColor,
+        child: (isDesktop() || isTablet())
+            ? tabBody
+            : AnimatedBuilder(
+                animation: tabController,
+                builder: (context, child) {
+                  if (tabController.index == 2) {
+                    return tabBody;
+                  }
+                  return GridViewObserver(
+                    controller: observerController,
+                    child: Column(
+                      children: [
+                        menuBar,
+                        menuBody,
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+""",
+)
+replace_once(
+    video_page,
+    """                    compact: compactTabs && !isDesktop() && !isTablet(),
+""",
+    """                    compact: !isDesktop() && !isTablet(),
+""",
+)
+
+controller = Path("lib/pages/player/controller/player_syncplay_controller.dart")
+replace_once(
+    controller,
+    """  bool _connectionLossHandled = false;
+  int _nextChatMessageId = 1;
+""",
+    """  bool _connectionLossHandled = false;
+  Future<void>? _retryFuture;
+  int _nextChatMessageId = 1;
+  final Set<int> _unreadChatMessageIds = <int>{};
+  final Set<int> _unreadMentionMessageIds = <int>{};
+""",
+)
+replace_once(
+    controller,
+    """    chatMessages.add(chatMessage);
+    while (chatMessages.length > maxChatMessages) {
+      chatMessages.removeAt(0);
+    }
+    if (effectiveType == SyncPlayChatMessageType.user &&
+        fromRemote &&
+        !chatVisible) {
+      unreadChatCount++;
+      if (effectiveMention) {
+        unreadMentionCount++;
+      }
+    }
+    if (effectiveType == SyncPlayChatMessageType.user) {
+      _chatStreamController.add(chatMessage);
+    }
+""",
+    """    chatMessages.add(chatMessage);
+    while (chatMessages.length > maxChatMessages) {
+      final removed = chatMessages.removeAt(0);
+      _unreadChatMessageIds.remove(removed.id);
+      _unreadMentionMessageIds.remove(removed.id);
+    }
+    if (effectiveType == SyncPlayChatMessageType.user &&
+        fromRemote &&
+        !chatVisible) {
+      _unreadChatMessageIds.add(chatMessage.id);
+      if (effectiveMention) {
+        _unreadMentionMessageIds.add(chatMessage.id);
+      }
+    }
+    _syncUnreadCounts();
+    if (effectiveType == SyncPlayChatMessageType.user) {
+      _chatStreamController.add(chatMessage);
+    }
+""",
+)
+replace_once(
+    controller,
+    """  void markChatRead() {
+    unreadChatCount = 0;
+    unreadMentionCount = 0;
+  }
+
+  void clearChatSession() {
+    chatMessages.clear();
+    unreadChatCount = 0;
+    unreadMentionCount = 0;
+    mutedChatUsers.clear();
+    _activeChatRoom = '';
+  }
+
+  /// Clears messages without leaving the currently joined room.
+  void clearChatHistory() {
+    chatMessages.clear();
+    unreadChatCount = 0;
+    unreadMentionCount = 0;
+    mutedChatUsers.clear();
+  }
+""",
+    """  void markChatRead() {
+    _clearUnreadTracking();
+  }
+
+  void _clearUnreadTracking() {
+    _unreadChatMessageIds.clear();
+    _unreadMentionMessageIds.clear();
+    _syncUnreadCounts();
+  }
+
+  void clearChatSession() {
+    chatMessages.clear();
+    _clearUnreadTracking();
+    mutedChatUsers.clear();
+    _activeChatRoom = '';
+  }
+
+  /// Clears messages without leaving the currently joined room.
+  void clearChatHistory() {
+    chatMessages.clear();
+    _clearUnreadTracking();
+    mutedChatUsers.clear();
+  }
+""",
+)
+replace_once(
+    controller,
+    """    if (muted) {
+      mutedChatUsers.add(safeName);
+      chatMessages.removeWhere(
+        (message) =>
+            message.type == SyncPlayChatMessageType.user &&
+            message.fromRemote &&
+            message.username == safeName,
+      );
+      _recalculateUnread();
+    } else {
+""",
+    """    if (muted) {
+      mutedChatUsers.add(safeName);
+      final removedIds = chatMessages
+          .where(
+            (message) =>
+                message.type == SyncPlayChatMessageType.user &&
+                message.fromRemote &&
+                message.username == safeName,
+          )
+          .map((message) => message.id)
+          .toSet();
+      chatMessages.removeWhere(
+        (message) => removedIds.contains(message.id),
+      );
+      _unreadChatMessageIds.removeAll(removedIds);
+      _unreadMentionMessageIds.removeAll(removedIds);
+      _syncUnreadCounts();
+    } else {
+""",
+)
+replace_once(
+    controller,
+    """  String get unreadChatLabel {
+    if (unreadMentionCount > 0) {
+      return '@$unreadMentionCount';
+    }
+    return unreadChatCount > 99 ? '99+' : '$unreadChatCount';
+  }
+""",
+    """  String get unreadChatLabel {
+    if (unreadMentionCount > 0) {
+      return '@${unreadMentionCount > 99 ? '99+' : unreadMentionCount}';
+    }
+    return unreadChatCount > 99 ? '99+' : '$unreadChatCount';
+  }
+""",
+)
+replace_once(
+    controller,
+    """  void _recalculateUnread() {
+    var unread = 0;
+    var mentions = 0;
+    for (final message in chatMessages) {
+      if (message.type == SyncPlayChatMessageType.user &&
+          message.fromRemote) {
+        unread++;
+        if (message.mentionsSelf) {
+          mentions++;
+        }
+      }
+    }
+    unreadChatCount = unread;
+    unreadMentionCount = mentions;
+  }
+""",
+    """  void _syncUnreadCounts() {
+    unreadChatCount = _unreadChatMessageIds.length;
+    unreadMentionCount = _unreadMentionMessageIds.length;
+  }
+""",
+)
+replace_once(
+    controller,
+    """  /// Repeats the last requested room using the existing session's history.
+  Future<void> retryConnection() async {
+    final room = _requestedChatRoom;
+    final username = _requestedUsername;
+    final changeEpisode = _changeEpisode;
+    if (room.isEmpty || changeEpisode == null ||
+        connectionState == SyncPlayConnectionState.disconnected) {
+      return;
+    }
+    await createRoom(
+      room,
+      username,
+      changeEpisode,
+      preserveChatHistory: true,
+    );
+  }
+""",
+    """  /// Repeats the last requested room using the existing session's history.
+  Future<void> retryConnection() {
+    final activeRetry = _retryFuture;
+    if (activeRetry != null) {
+      return activeRetry;
+    }
+    final retry = _retryConnectionOnce();
+    _retryFuture = retry;
+    return retry.whenComplete(() {
+      if (identical(_retryFuture, retry)) {
+        _retryFuture = null;
+      }
+    });
+  }
+
+  Future<void> _retryConnectionOnce() async {
+    final room = _requestedChatRoom;
+    final username = _requestedUsername;
+    final changeEpisode = _changeEpisode;
+    if (room.isEmpty ||
+        changeEpisode == null ||
+        connectionState == SyncPlayConnectionState.disconnected) {
+      if (connectionState != SyncPlayConnectionState.disconnected) {
+        connectionState = SyncPlayConnectionState.failed;
+      }
+      return;
+    }
+    await createRoom(
+      room,
+      username,
+      changeEpisode,
+      preserveChatHistory: true,
+    );
+  }
+""",
+)
+replace_once(
+    controller,
+    """    _connectionSessions.cancel();
+    syncplayController = null;
+    syncplayRoom = '';
+    syncplayClientRtt = 0;
+    connectionState = SyncPlayConnectionState.reconnecting;
+    await client.disconnect();
+    KazumiDialog.showToast(
+      message: 'SyncPlay: 同步中断 $error',
+      duration: const Duration(seconds: 5),
+      showActionButton: true,
+      actionLabel: '重新连接',
+      onActionPressed: retryConnection,
+    );
+""",
+    """    _connectionSessions.cancel();
+    syncplayController = null;
+    syncplayRoom = '';
+    syncplayClientRtt = 0;
+    connectionState = SyncPlayConnectionState.reconnecting;
+    appendSystemMessage('连接已中断');
+    await client.disconnect();
+    KazumiDialog.showToast(
+      message: 'SyncPlay: 同步中断，正在重新连接',
+      duration: const Duration(seconds: 3),
+    );
+    await retryConnection();
+    if (connectionState == SyncPlayConnectionState.connected) {
+      appendSystemMessage('已重新连接');
+      KazumiDialog.showToast(
+        message: 'SyncPlay: 已重新连接',
+        duration: const Duration(seconds: 3),
+      );
+    } else if (connectionState != SyncPlayConnectionState.disconnected &&
+        connectionState != SyncPlayConnectionState.failed) {
+      connectionState = SyncPlayConnectionState.failed;
+    }
+""",
+)
+
+syncplay_sheet = Path("lib/pages/player/syncplay_sheet.dart")
+replace_once(
+    syncplay_sheet,
+    """import 'dart:math';
+""",
+    """import 'dart:async';
+import 'dart:math';
+""",
+)
+replace_once(
+    syncplay_sheet,
+    """      _SyncPlayDestination.server => const _SyncPlayServerSheet(),
+""",
+    """      _SyncPlayDestination.server => _SyncPlayServerSheet(
+        onSaved: playerController.syncplay.connectionState ==
+                SyncPlayConnectionState.failed
+            ? playerController.syncplay.retryConnection
+            : null,
+      ),
+""",
+)
+replace_once(
+    syncplay_sheet,
+    """  Widget _buildFailed(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colorScheme = theme.colorScheme;
+    return Material(
+      color: colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(materialBottomSheetRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_off_rounded, color: colorScheme.onErrorContainer),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                '连接失败，请检查服务器后重试',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            FilledButton.tonal(
+              onPressed: playerController.syncplay.retryConnection,
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+""",
+    """  Widget _buildFailed(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme colorScheme = theme.colorScheme;
+    return Material(
+      color: colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(materialBottomSheetRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.cloud_off_rounded,
+                  color: colorScheme.onErrorContainer,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    '连接失败，请检查服务器后重试',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context)
+                        .pop(_SyncPlayDestination.server),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.onErrorContainer,
+                    ),
+                    icon: const Icon(Icons.dns_outlined),
+                    label: const Text('更换服务器'),
+                  ),
+                  FilledButton.tonal(
+                    onPressed: playerController.syncplay.retryConnection,
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+""",
+)
+replace_once(
+    syncplay_sheet,
+    """class _SyncPlayServerSheet extends StatefulWidget {
+  const _SyncPlayServerSheet();
+
+  @override
+""",
+    """class _SyncPlayServerSheet extends StatefulWidget {
+  const _SyncPlayServerSheet({this.onSaved});
+
+  final Future<void> Function()? onSaved;
+
+  @override
+""",
+)
+replace_once(
+    syncplay_sheet,
+    """  void _save() {
+    String endPoint = _selectedEndPoint;
+    if (endPoint == _customOption) {
+      endPoint = _customEndPointController.text.trim();
+      if (parseSyncPlayEndPoint(endPoint) == null) {
+        setState(() => _customEndPointError = '地址格式为 host:port');
+        return;
+      }
+    }
+    GStorage.putSetting<String>(SettingsKeys.syncPlayEndPoint, endPoint);
+    Navigator.of(context).pop();
+  }
+""",
+    """  Future<void> _save() async {
+    String endPoint = _selectedEndPoint;
+    if (endPoint == _customOption) {
+      endPoint = _customEndPointController.text.trim();
+      if (parseSyncPlayEndPoint(endPoint) == null) {
+        setState(() => _customEndPointError = '地址格式为 host:port');
+        return;
+      }
+    }
+    await GStorage.putSetting<String>(SettingsKeys.syncPlayEndPoint, endPoint);
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop();
+    final onSaved = widget.onSaved;
+    if (onSaved != null) {
+      unawaited(onSaved());
+    }
+  }
+""",
+)
+
+state_test = Path("test/player_syncplay_chat_state_test.dart")
+replace_once(
+    state_test,
+    """  test('message grouping requires same user and a one-minute window', () {
+""",
+    """  test('muting a user preserves read state for other history', () async {
+    final controller = _controller();
+    controller.setChatVisible(true);
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'already read',
+      fromRemote: true,
+    );
+    controller.appendUserMessage(
+      username: 'other',
+      message: 'also read',
+      fromRemote: true,
+    );
+
+    controller.setChatUserMuted('friend', true);
+
+    expect(controller.chatMessages.single.username, 'other');
+    expect(controller.unreadChatCount, 0);
+    expect(controller.unreadMentionCount, 0);
+    await controller.dispose();
+  });
+
+  test('muting removes only that user from precise unread tracking', () async {
+    final controller = _controller();
+    controller.appendUserMessage(
+      username: 'friend',
+      message: '@me hidden',
+      fromRemote: true,
+      mentionsSelf: true,
+    );
+    controller.appendUserMessage(
+      username: 'other',
+      message: 'keep unread',
+      fromRemote: true,
+    );
+    expect(controller.unreadChatCount, 2);
+    expect(controller.unreadMentionCount, 1);
+
+    controller.setChatUserMuted('friend', true);
+
+    expect(controller.chatMessages.single.username, 'other');
+    expect(controller.unreadChatCount, 1);
+    expect(controller.unreadMentionCount, 0);
+    await controller.dispose();
+  });
+
+  test('retry without a pending request cannot stay reconnecting', () async {
+    final controller = _controller();
+    controller.connectionState = SyncPlayConnectionState.reconnecting;
+
+    await controller.retryConnection();
+
+    expect(controller.connectionState, SyncPlayConnectionState.failed);
+    await controller.dispose();
+  });
+
+  test('message grouping requires same user and a one-minute window', () {
+""",
+)
+replace_once(
+    state_test,
+    """    expect(controller.unreadChatCount, 301);
+""",
+    """    expect(controller.unreadChatCount, 300);
+""",
+)
