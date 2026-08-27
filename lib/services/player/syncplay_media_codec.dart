@@ -1,5 +1,3 @@
-import 'package:kazumi/services/player/syncplay_room_models.dart';
-
 /// The one place where the legacy SyncPlay file-name media format is parsed.
 ///
 /// SyncPlay peers exchange names such as `12345[9]`; only the Bangumi id and

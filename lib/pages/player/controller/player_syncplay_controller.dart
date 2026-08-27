@@ -31,8 +31,8 @@ abstract class _PlayerSyncPlayController with Store {
     @visibleForTesting String Function()? endpointProvider,
   })
       : _clientFactory = clientFactory ??
-            ({required String host, required int port}) =>
-                SyncplayClient(host: host, port: port),
+            (({required String host, required int port}) =>
+                SyncplayClient(host: host, port: port)),
         _endpointProvider = endpointProvider;
 
   final SyncplayClientFactory _clientFactory;

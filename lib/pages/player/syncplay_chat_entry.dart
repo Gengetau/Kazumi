@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
 class SyncPlayChatEntry extends StatelessWidget {
   const SyncPlayChatEntry({
@@ -9,7 +9,7 @@ class SyncPlayChatEntry extends StatelessWidget {
     required this.onPressed,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final VoidCallback onPressed;
 
   @override

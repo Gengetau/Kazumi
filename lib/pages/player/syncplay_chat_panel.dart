@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/utils/device.dart';
 
 enum SyncPlayChatHeaderAction {
@@ -33,7 +33,7 @@ class SyncPlayChatHeader extends StatefulWidget {
     this.onClearHistory,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final String? inviteText;
   final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
@@ -272,7 +272,7 @@ class SyncPlayChatList extends StatefulWidget {
     this.onReply,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final double? maxBubbleWidth;
   final ValueChanged<String>? onReply;
 
@@ -286,7 +286,7 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
   bool _hasNewMessages = false;
   bool _newMessageNotificationScheduled = false;
 
-  PlayerSyncPlayController get controller => widget.controller;
+  SyncPlayRoomSessionController get controller => widget.controller;
 
   bool get _isNearBottom {
     if (!_scrollController.hasClients) {
@@ -435,7 +435,7 @@ class SyncPlayChatTile extends StatelessWidget {
     this.onReply,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final SyncPlayChatMessage message;
   final double? maxBubbleWidth;
   final bool grouped;
@@ -753,7 +753,7 @@ class SyncPlayChatComposer extends StatefulWidget {
     required this.onSend,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final Future<bool> Function(String message) onSend;
 
   @override
@@ -766,7 +766,7 @@ class SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
   bool _sending = false;
   String? _sendError;
 
-  PlayerSyncPlayController get controller => widget.controller;
+  SyncPlayRoomSessionController get controller => widget.controller;
 
   bool get _isConnected => controller.isChatConnected;
 
@@ -942,7 +942,7 @@ class SyncPlayChatPanel extends StatefulWidget {
     this.onClearHistory,
   });
 
-  final PlayerSyncPlayController controller;
+  final SyncPlayRoomSessionController controller;
   final Future<bool> Function(String message) onSend;
   final String? inviteText;
   final String Function()? inviteTextBuilder;
