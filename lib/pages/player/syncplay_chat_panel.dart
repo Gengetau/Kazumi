@@ -5,47 +5,196 @@ import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/utils/device.dart';
 
-/// The chat surface for the currently active SyncPlay room.
+/// The small command row above a chat room.
 ///
-/// The panel deliberately receives the controller and send callback instead
-/// of looking them up through Modular, which keeps it usable in the video page
-/// and in isolated widget tests.
-class SyncPlayChatPanel extends StatefulWidget {
-  const SyncPlayChatPanel({
+/// Header owns the RTT observer. This keeps frequent position updates from
+/// rebuilding the message list or the text composer.
+class SyncPlayChatHeader extends StatefulWidget {
+  const SyncPlayChatHeader({
     super.key,
     required this.controller,
-    required this.onSend,
     this.inviteText,
+    this.inviteTextBuilder,
     this.onCopyInvite,
+    this.compact = false,
   });
 
   final PlayerSyncPlayController controller;
-  final Future<bool> Function(String message) onSend;
   final String? inviteText;
+  final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
+  final bool compact;
 
   @override
-  State<SyncPlayChatPanel> createState() => _SyncPlayChatPanelState();
+  State<SyncPlayChatHeader> createState() => _SyncPlayChatHeaderState();
 }
 
-class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
-  final TextEditingController _textController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
-  final ScrollController _scrollController = ScrollController();
-
-  int? _lastMessageId;
-  bool _hasNewMessages = false;
-  bool _sending = false;
+class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
   bool _copied = false;
-  bool _newMessageNotificationScheduled = false;
-  String? _sendError;
   Timer? _copyResetTimer;
 
-  PlayerSyncPlayController get controller => widget.controller;
+  @override
+  void dispose() {
+    _copyResetTimer?.cancel();
+    super.dispose();
+  }
 
-  bool get _isConnected =>
-      controller.hasSession && controller.syncplayRoom.isNotEmpty;
+  String _inviteText(String room) {
+    final builder = widget.inviteTextBuilder;
+    if (builder != null) {
+      final text = builder();
+      if (text.isNotEmpty) {
+        return text;
+      }
+    }
+    final text = widget.inviteText;
+    if (text != null && text.isNotEmpty) {
+      return text;
+    }
+    return 'Kazumi 一起看邀请\n房间：$room';
+  }
+
+  void _copyInvite(String room) {
+    widget.onCopyInvite?.call();
+    if (widget.onCopyInvite == null) {
+      Clipboard.setData(ClipboardData(text: _inviteText(room)));
+    }
+    _copyResetTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _copied = true);
+    _copyResetTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() => _copied = false);
+      }
+    });
+  }
+
+  Widget _buildHeader(
+    BuildContext context, {
+    required String room,
+    required int rtt,
+    required SyncPlayConnectionState state,
+    required bool chatDanmakuEnabled,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final status = switch (state) {
+      SyncPlayConnectionState.connected => room.isEmpty ? '未加入房间' : '已连接',
+      SyncPlayConnectionState.connecting => '正在连接',
+      SyncPlayConnectionState.reconnecting => '正在重新连接',
+      SyncPlayConnectionState.failed => '连接失败',
+      SyncPlayConnectionState.disconnected => '未连接',
+    };
+    final roomLabel = room.isEmpty ? status : '房间 $room';
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, widget.compact ? 8 : 12, 12, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '聊天室',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    roomLabel,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                if (room.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '$rtt ms',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!widget.compact) ...[
+            Text(
+              '聊天弹幕',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            Switch(
+              value: chatDanmakuEnabled,
+              onChanged: widget.controller.setChatDanmakuEnabled,
+            ),
+          ],
+          IconButton(
+            onPressed: room.isEmpty ? null : () => _copyInvite(room),
+            tooltip: '复制邀请',
+            icon: Icon(
+              _copied ? Icons.check_rounded : Icons.copy_rounded,
+              size: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Observer(
+      builder: (context) {
+        final controller = widget.controller;
+        final room = controller.syncplayRoom;
+        final rtt = controller.syncplayClientRtt;
+        final state = controller.connectionState;
+        final chatDanmakuEnabled = controller.chatDanmakuEnabled;
+        return _buildHeader(
+          context,
+          room: room,
+          rtt: rtt,
+          state: state,
+          chatDanmakuEnabled: chatDanmakuEnabled,
+        );
+      },
+    );
+  }
+}
+
+/// A message list with its own MobX observer and scroll/new-message state.
+class SyncPlayChatList extends StatefulWidget {
+  const SyncPlayChatList({
+    super.key,
+    required this.controller,
+    this.maxBubbleWidth,
+  });
+
+  final PlayerSyncPlayController controller;
+  final double? maxBubbleWidth;
+
+  @override
+  State<SyncPlayChatList> createState() => _SyncPlayChatListState();
+}
+
+class _SyncPlayChatListState extends State<SyncPlayChatList> {
+  final ScrollController _scrollController = ScrollController();
+  int? _lastMessageId;
+  bool _hasNewMessages = false;
+  bool _newMessageNotificationScheduled = false;
+
+  PlayerSyncPlayController get controller => widget.controller;
 
   bool get _isNearBottom {
     if (!_scrollController.hasClients) {
@@ -64,9 +213,6 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
   @override
   void dispose() {
     _scrollController.removeListener(_handleScroll);
-    _copyResetTimer?.cancel();
-    _textController.dispose();
-    _focusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -77,9 +223,6 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
     }
   }
 
-  /// Build can run more than once for a single incoming message. Keep the
-  /// bookkeeping synchronous, but defer any stateful notification to the next
-  /// frame so build never calls setState synchronously.
   void _scheduleScrollIfNeeded(List<SyncPlayChatMessage> messages) {
     if (messages.isEmpty) {
       _lastMessageId = null;
@@ -87,12 +230,12 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
       return;
     }
 
-    final int newestMessageId = messages.last.id;
+    final newestMessageId = messages.last.id;
     if (newestMessageId == _lastMessageId) {
       return;
     }
 
-    final bool shouldFollow = _isNearBottom;
+    final shouldFollow = _isNearBottom;
     _lastMessageId = newestMessageId;
     if (shouldFollow) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -114,6 +257,209 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
         }
       });
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Observer(
+      builder: (context) {
+        final messages = controller.chatMessages.toList(growable: false);
+        _scheduleScrollIfNeeded(messages);
+        if (messages.isEmpty) {
+          return Center(
+            child: Text(
+              controller.syncplayRoom.isEmpty ? '加入房间后开始聊天' : '暂无聊天消息',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          );
+        }
+
+        return Stack(
+          children: [
+            ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: messages.length,
+              itemBuilder: (context, index) => SyncPlayChatTile(
+                message: messages[index],
+                maxBubbleWidth: widget.maxBubbleWidth,
+              ),
+            ),
+            if (_hasNewMessages)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 12,
+                child: Center(
+                  child: FilledButton.tonalIcon(
+                    onPressed: () {
+                      if (_scrollController.hasClients) {
+                        _scrollController.animateTo(
+                          _scrollController.position.maxScrollExtent,
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOut,
+                        );
+                      }
+                      setState(() => _hasNewMessages = false);
+                    },
+                    icon: const Icon(Icons.arrow_downward_rounded),
+                    label: const Text('有新消息'),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// One chat bubble. It is intentionally a separate widget so later message
+/// actions only rebuild the affected tile.
+class SyncPlayChatTile extends StatelessWidget {
+  const SyncPlayChatTile({
+    super.key,
+    required this.message,
+    this.maxBubbleWidth,
+  });
+
+  final SyncPlayChatMessage message;
+  final double? maxBubbleWidth;
+
+  String _formatTime(DateTime time) {
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Observer(
+      builder: (context) {
+        final theme = Theme.of(context);
+        final colorScheme = theme.colorScheme;
+        if (message.type == SyncPlayChatMessageType.system) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Center(
+              key: ValueKey<int>(message.id),
+              child: Text(
+                message.message,
+                textAlign: TextAlign.center,
+                softWrap: true,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          );
+        }
+
+        final remote = message.fromRemote;
+        final bubbleColor = remote
+            ? colorScheme.surfaceContainerHighest
+            : colorScheme.primaryContainer;
+        final textColor = remote
+            ? colorScheme.onSurfaceVariant
+            : colorScheme.onPrimaryContainer;
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Align(
+            alignment: remote ? Alignment.centerLeft : Alignment.centerRight,
+            child: ConstrainedBox(
+              key: ValueKey<int>(message.id),
+              constraints: BoxConstraints(
+                maxWidth: maxBubbleWidth ??
+                    MediaQuery.sizeOf(context).width * .76,
+              ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: bubbleColor,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              message.username,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: textColor.withValues(alpha: .75),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatTime(message.time),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: textColor.withValues(alpha: .65),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        message.message,
+                        softWrap: true,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SendChatIntent extends Intent {
+  const _SendChatIntent();
+}
+
+/// Editable chat input. Sending only disables its button; the field remains
+/// editable so an in-flight send cannot discard or lock the user's draft.
+class SyncPlayChatComposer extends StatefulWidget {
+  const SyncPlayChatComposer({
+    super.key,
+    required this.controller,
+    required this.onSend,
+  });
+
+  final PlayerSyncPlayController controller;
+  final Future<bool> Function(String message) onSend;
+
+  @override
+  State<SyncPlayChatComposer> createState() => _SyncPlayChatComposerState();
+}
+
+class _SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
+  final TextEditingController _textController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+  bool _sending = false;
+  String? _sendError;
+
+  PlayerSyncPlayController get controller => widget.controller;
+
+  bool get _isConnected => controller.isChatConnected;
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _focusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _send() async {
@@ -150,253 +496,63 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
     }
   }
 
-  String _inviteText(String room) {
-    if (widget.inviteText != null && widget.inviteText!.isNotEmpty) {
-      return widget.inviteText!;
-    }
-    return 'Kazumi 一起看邀请\n房间：$room';
-  }
-
-  void _copyInvite(String room) {
-    widget.onCopyInvite?.call();
-    if (widget.onCopyInvite == null) {
-      Clipboard.setData(ClipboardData(text: _inviteText(room)));
-    }
-    _copyResetTimer?.cancel();
-    if (!mounted) {
-      return;
-    }
-    setState(() => _copied = true);
-    _copyResetTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() => _copied = false);
-      }
-    });
-  }
-
-  String _formatTime(DateTime time) {
-    final String hour = time.hour.toString().padLeft(2, '0');
-    final String minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  Widget _buildHeader(BuildContext context, String room) {
+  Widget _buildField(BuildContext context, bool editable) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final rtt = controller.syncplayClientRtt;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        runSpacing: 8,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '聊天室',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 8),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 140),
-                child: Text(
-                  room.isEmpty ? '未加入房间' : '房间 $room',
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              if (room.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Text(
-                  '$rtt ms',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '聊天弹幕',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              Switch(
-                value: controller.chatDanmakuEnabled,
-                onChanged: controller.setChatDanmakuEnabled,
-              ),
-              TextButton.icon(
-                onPressed: () => _copyInvite(room),
-                icon: Icon(
-                  _copied ? Icons.check_rounded : Icons.copy_rounded,
-                  size: 18,
-                ),
-                label: Text(_copied ? '已复制' : '复制邀请'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMessage(BuildContext context, SyncPlayChatMessage message) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    if (message.type == SyncPlayChatMessageType.system) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        child: Center(
-          key: ValueKey<int>(message.id),
-          child: Text(
-            message.message,
-            textAlign: TextAlign.center,
-            softWrap: true,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
+    final field = TextField(
+      controller: _textController,
+      focusNode: _focusNode,
+      enabled: editable,
+      minLines: 1,
+      maxLines: 3,
+      maxLength: controller.chatMessageLengthLimit,
+      textInputAction:
+          isDesktop() ? TextInputAction.newline : TextInputAction.send,
+      onSubmitted: (_) {
+        if (!isDesktop()) {
+          unawaited(_send());
+        }
+      },
+      onChanged: (_) {
+        if (_sendError != null) {
+          setState(() => _sendError = null);
+        }
+      },
+      decoration: InputDecoration(
+        hintText: _isConnected ? '输入消息……' : '加入房间后即可聊天',
+        counterText: '',
+        filled: true,
+        fillColor: colorScheme.surfaceContainerHighest,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
         ),
-      );
-    }
-
-    final bool remote = message.fromRemote;
-    final bubbleColor = remote
-        ? colorScheme.surfaceContainerHighest
-        : colorScheme.primaryContainer;
-    final textColor =
-        remote ? colorScheme.onSurfaceVariant : colorScheme.onPrimaryContainer;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Align(
-        alignment: remote ? Alignment.centerLeft : Alignment.centerRight,
-        child: ConstrainedBox(
-          key: ValueKey<int>(message.id),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.sizeOf(context).width * 0.8,
-          ),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: bubbleColor,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          message.username,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: textColor.withValues(alpha: 0.75),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatTime(message.time),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: textColor.withValues(alpha: 0.65),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    message.message,
-                    softWrap: true,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: textColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 10,
         ),
       ),
     );
-  }
-
-  Widget _buildComposer(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bool enabled = _isConnected && !_sending;
-    final bottomPadding = MediaQuery.viewPaddingOf(context).bottom;
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(12, 8, 12, bottomPadding + 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _textController,
-                  focusNode: _focusNode,
-                  enabled: enabled,
-                  minLines: 1,
-                  maxLines: 3,
-                  maxLength: controller.chatMessageLengthLimit,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  onChanged: (_) {
-                    if (_sendError != null) {
-                      setState(() => _sendError = null);
-                    }
-                  },
-                  decoration: InputDecoration(
-                    hintText: _isConnected ? '输入消息……' : '加入房间后即可聊天',
-                    counterText: '',
-                    filled: true,
-                    fillColor: colorScheme.surfaceContainerHighest,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: enabled ? _send : null,
-                child: const Text('发送'),
-              ),
-            ],
+    if (!isDesktop()) {
+      return field;
+    }
+    // Enter submits on desktop; Shift+Enter is not matched and remains the
+    // normal TextField newline action.
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        const SingleActivator(LogicalKeyboardKey.enter):
+            const _SendChatIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _SendChatIntent: CallbackAction<_SendChatIntent>(
+            onInvoke: (_) {
+              unawaited(_send());
+              return null;
+            },
           ),
-          if (_sendError != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              _sendError!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.error,
-              ),
-            ),
-          ],
-        ],
+        },
+        child: field,
       ),
     );
   }
@@ -405,69 +561,89 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
   Widget build(BuildContext context) {
     return Observer(
       builder: (context) {
-        final messages = controller.chatMessages.toList(growable: false);
-        final room = controller.syncplayRoom.isNotEmpty
-            ? controller.syncplayRoom
-            : controller.activeChatRoom;
-        _scheduleScrollIfNeeded(messages);
+        final editable = _isConnected;
+        final sendEnabled = editable && !_sending;
+        final bottomPadding = MediaQuery.viewPaddingOf(context).bottom;
+        final theme = Theme.of(context);
+        final colorScheme = theme.colorScheme;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(12, 8, 12, bottomPadding + 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(child: _buildField(context, editable)),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: sendEnabled ? _send : null,
+                    child: const Text('发送'),
+                  ),
+                ],
+              ),
+              if (_sendError != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _sendError!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.error,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
 
+/// The chat surface for the currently active SyncPlay room.
+class SyncPlayChatPanel extends StatelessWidget {
+  const SyncPlayChatPanel({
+    super.key,
+    required this.controller,
+    required this.onSend,
+    this.inviteText,
+    this.inviteTextBuilder,
+    this.onCopyInvite,
+    this.compact = false,
+  });
+
+  final PlayerSyncPlayController controller;
+  final Future<bool> Function(String message) onSend;
+  final String? inviteText;
+  final String Function()? inviteTextBuilder;
+  final VoidCallback? onCopyInvite;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildHeader(context, room),
+            SyncPlayChatHeader(
+              controller: controller,
+              inviteText: inviteText,
+              inviteTextBuilder: inviteTextBuilder,
+              onCopyInvite: onCopyInvite,
+              compact: compact,
+            ),
             const Divider(height: 1),
             Expanded(
-              child: messages.isEmpty
-                  ? Center(
-                      child: Text(
-                        controller.syncplayRoom.isEmpty
-                            ? '加入房间后开始聊天'
-                            : '暂无聊天消息',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
-                      ),
-                    )
-                  : Stack(
-                      children: [
-                        ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: messages.length,
-                          itemBuilder: (context, index) =>
-                              _buildMessage(context, messages[index]),
-                        ),
-                        if (_hasNewMessages)
-                          Positioned(
-                            left: 0,
-                            right: 0,
-                            bottom: 12,
-                            child: Center(
-                              child: FilledButton.tonalIcon(
-                                onPressed: () {
-                                  if (_scrollController.hasClients) {
-                                    _scrollController.animateTo(
-                                      _scrollController
-                                          .position.maxScrollExtent,
-                                      duration: const Duration(
-                                        milliseconds: 180,
-                                      ),
-                                      curve: Curves.easeOut,
-                                    );
-                                  }
-                                  setState(() => _hasNewMessages = false);
-                                },
-                                icon: const Icon(Icons.arrow_downward_rounded),
-                                label: const Text('有新消息'),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
+              child: SyncPlayChatList(
+                controller: controller,
+                maxBubbleWidth: availableWidth * .76,
+              ),
             ),
-            _buildComposer(context),
+            SyncPlayChatComposer(controller: controller, onSend: onSend),
           ],
         );
       },

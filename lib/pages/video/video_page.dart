@@ -1304,7 +1304,7 @@ class _VideoPageState extends State<VideoPage>
                   SyncPlayChatPanel(
                     controller: playerController.syncplay,
                     onSend: playerController.trySendSyncPlayChatMessage,
-                    inviteText: playerController.syncPlayInviteText(),
+                    inviteTextBuilder: playerController.syncPlayInviteText,
                   ),
                 ],
               ),

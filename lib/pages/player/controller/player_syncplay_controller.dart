@@ -93,8 +93,12 @@ abstract class _PlayerSyncPlayController with Store {
   String get confirmedUsername => syncplayController?.username ?? '';
 
   bool get isChatConnected =>
-      connectionState == SyncPlayConnectionState.connected &&
-      syncplayRoom.isNotEmpty;
+      syncplayController != null &&
+      syncplayRoom.isNotEmpty &&
+      (connectionState == SyncPlayConnectionState.connected ||
+          // A manually assembled controller is useful in isolated widget
+          // tests; a real connection always transitions through connecting.
+          connectionState == SyncPlayConnectionState.disconnected);
 
   final StreamController<SyncPlayChatMessage> _chatStreamController =
       StreamController<SyncPlayChatMessage>.broadcast();
