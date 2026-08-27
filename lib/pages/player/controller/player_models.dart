@@ -42,11 +42,6 @@ class PlaybackInitParams {
   });
 }
 
-enum DanmakuDestination {
-  chatRoom,
-  remoteDanmaku,
-}
-
 /// The lifecycle of the SyncPlay connection owned by the player.
 ///
 /// A socket being allocated is deliberately not the same thing as being

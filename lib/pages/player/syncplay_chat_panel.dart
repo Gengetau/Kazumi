@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
+import 'package:kazumi/pages/player/controller/player_chat_danmaku_controller.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/utils/device.dart';
@@ -27,8 +28,7 @@ class SyncPlayChatHeader extends StatefulWidget {
     this.inviteTextBuilder,
     this.onCopyInvite,
     this.compact = false,
-    this.globalDanmakuEnabled = true,
-    this.onEnableGlobalDanmaku,
+    this.chatDanmakuController,
     this.onReconnect,
     this.onClearHistory,
   });
@@ -38,8 +38,7 @@ class SyncPlayChatHeader extends StatefulWidget {
   final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
   final bool compact;
-  final bool globalDanmakuEnabled;
-  final VoidCallback? onEnableGlobalDanmaku;
+  final PlayerChatDanmakuController? chatDanmakuController;
   final VoidCallback? onReconnect;
   final VoidCallback? onClearHistory;
 
@@ -98,13 +97,20 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
       case SyncPlayChatHeaderAction.clearHistory:
         widget.onClearHistory?.call();
       case SyncPlayChatHeaderAction.toggleChatDanmaku:
-        if (!widget.globalDanmakuEnabled) {
-          widget.onEnableGlobalDanmaku?.call();
-        } else {
-          widget.controller.setChatDanmakuEnabled(
-            !widget.controller.chatDanmakuEnabled,
-          );
-        }
+        _setChatDanmakuEnabled(!_chatDanmakuEnabled);
+    }
+  }
+
+  bool get _chatDanmakuEnabled =>
+      widget.chatDanmakuController?.enabled ??
+      widget.controller.chatDanmakuEnabled;
+
+  void _setChatDanmakuEnabled(bool value) {
+    final chatDanmaku = widget.chatDanmakuController;
+    if (chatDanmaku != null) {
+      chatDanmaku.setEnabled(value);
+    } else {
+      widget.controller.setChatDanmakuEnabled(value);
     }
   }
 
@@ -163,36 +169,20 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
             ),
           ),
           if (!widget.compact) ...[
-            Semantics(
-              enabled: widget.globalDanmakuEnabled,
-              label: widget.globalDanmakuEnabled ? '聊天弹幕' : '需先开启总弹幕',
-              child: GestureDetector(
-                onTap: widget.globalDanmakuEnabled
-                    ? null
-                    : widget.onEnableGlobalDanmaku,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '聊天弹幕',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    Switch(
-                      value:
-                          widget.globalDanmakuEnabled && chatDanmakuEnabled,
-                      onChanged: widget.globalDanmakuEnabled
-                          ? (_) {
-                              widget.controller.setChatDanmakuEnabled(
-                                !chatDanmakuEnabled,
-                              );
-                            }
-                          : null,
-                    ),
-                  ],
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '聊天弹幕',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
+                Switch(
+                  value: chatDanmakuEnabled,
+                  onChanged: _setChatDanmakuEnabled,
+                ),
+              ],
             ),
           ],
           if (widget.compact)
@@ -217,13 +207,7 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
                 ),
                 PopupMenuItem(
                   value: SyncPlayChatHeaderAction.toggleChatDanmaku,
-                  child: Text(
-                    widget.globalDanmakuEnabled
-                        ? (widget.controller.chatDanmakuEnabled
-                            ? '关闭聊天弹幕'
-                            : '开启聊天弹幕')
-                        : '需先开启总弹幕',
-                  ),
+                  child: Text(chatDanmakuEnabled ? '关闭聊天弹幕' : '开启聊天弹幕'),
                 ),
               ],
               icon: const Icon(Icons.more_vert_rounded),
@@ -244,21 +228,24 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
 
   @override
   Widget build(BuildContext context) {
-    return Observer(
-      builder: (context) {
-        final controller = widget.controller;
-        final room = controller.syncplayRoom;
-        final rtt = controller.syncplayClientRtt;
-        final state = controller.connectionState;
-        final chatDanmakuEnabled = controller.chatDanmakuEnabled;
-        return _buildHeader(
-          context,
-          room: room,
-          rtt: rtt,
-          state: state,
-          chatDanmakuEnabled: chatDanmakuEnabled,
+    Widget observedHeader(BuildContext context) => Observer(
+          builder: (context) {
+            final controller = widget.controller;
+            return _buildHeader(
+              context,
+              room: controller.syncplayRoom,
+              rtt: controller.syncplayClientRtt,
+              state: controller.connectionState,
+              chatDanmakuEnabled: _chatDanmakuEnabled,
+            );
+          },
         );
-      },
+
+    final chatDanmaku = widget.chatDanmakuController;
+    if (chatDanmaku == null) return observedHeader(context);
+    return AnimatedBuilder(
+      animation: chatDanmaku,
+      builder: (context, child) => observedHeader(context),
     );
   }
 }
@@ -270,11 +257,13 @@ class SyncPlayChatList extends StatefulWidget {
     required this.controller,
     this.maxBubbleWidth,
     this.onReply,
+    this.onJoinRoom,
   });
 
   final SyncPlayRoomSessionController controller;
   final double? maxBubbleWidth;
   final ValueChanged<String>? onReply;
+  final VoidCallback? onJoinRoom;
 
   @override
   State<SyncPlayChatList> createState() => _SyncPlayChatListState();
@@ -360,12 +349,29 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
             .toList(growable: false);
         _scheduleScrollIfNeeded(messages);
         if (messages.isEmpty) {
+          final noRoom = controller.syncplayRoom.isEmpty;
+          final message = Text(
+            noRoom ? '加入房间后开始聊天' : '暂无聊天消息',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          );
+          final onJoin = widget.onJoinRoom;
+          if (!noRoom || onJoin == null) {
+            return Center(child: message);
+          }
           return Center(
-            child: Text(
-              controller.syncplayRoom.isEmpty ? '加入房间后开始聊天' : '暂无聊天消息',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                message,
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: onJoin,
+                  icon: const Icon(Icons.login_rounded),
+                  label: const Text('加入房间'),
+                ),
+              ],
             ),
           );
         }
@@ -936,10 +942,10 @@ class SyncPlayChatPanel extends StatefulWidget {
     this.inviteTextBuilder,
     this.onCopyInvite,
     this.compact = false,
-    this.globalDanmakuEnabled = true,
-    this.onEnableGlobalDanmaku,
+    this.chatDanmakuController,
     this.onReconnect,
     this.onClearHistory,
+    this.onJoinRoom,
   });
 
   final SyncPlayRoomSessionController controller;
@@ -948,10 +954,10 @@ class SyncPlayChatPanel extends StatefulWidget {
   final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
   final bool compact;
-  final bool globalDanmakuEnabled;
-  final VoidCallback? onEnableGlobalDanmaku;
+  final PlayerChatDanmakuController? chatDanmakuController;
   final VoidCallback? onReconnect;
   final VoidCallback? onClearHistory;
+  final VoidCallback? onJoinRoom;
 
   @override
   State<SyncPlayChatPanel> createState() => _SyncPlayChatPanelState();
@@ -981,8 +987,7 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
               inviteTextBuilder: widget.inviteTextBuilder,
               onCopyInvite: widget.onCopyInvite,
               compact: widget.compact,
-              globalDanmakuEnabled: widget.globalDanmakuEnabled,
-              onEnableGlobalDanmaku: widget.onEnableGlobalDanmaku,
+              chatDanmakuController: widget.chatDanmakuController,
               onReconnect: widget.onReconnect,
               onClearHistory: widget.onClearHistory,
             ),
@@ -992,6 +997,7 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
                 controller: widget.controller,
                 maxBubbleWidth: availableWidth * .76,
                 onReply: _reply,
+                onJoinRoom: widget.onJoinRoom,
               ),
             ),
             SyncPlayChatComposer(

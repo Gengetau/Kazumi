@@ -17,7 +17,6 @@ import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
-import 'package:kazumi/bean/dialog/material_bottom_sheet.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 import 'package:scrollview_observer/scrollview_observer.dart';
 import 'package:kazumi/pages/player/episode_comments_sheet.dart';
@@ -31,6 +30,8 @@ import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_room_notice.dart';
+import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:mobx/mobx.dart' as mobx;
 
 class VideoPage extends StatefulWidget {
@@ -59,6 +60,8 @@ class _VideoPageState extends State<VideoPage>
     with TickerProviderStateMixin, WindowListener {
   PlayerController get playerController => widget.playerController;
   SyncPlayRoomSessionController get roomSession => widget.roomSession;
+  SyncPlayClipboardInviteService get inviteService =>
+      inject<SyncPlayClipboardInviteService>();
   VideoPageController get videoPageController => widget.videoPageController;
   bool _didInitializePlayback = false;
   bool _isClosing = false;
@@ -84,8 +87,8 @@ class _VideoPageState extends State<VideoPage>
 
   late final bool disableAnimations;
 
-  StreamSubscription<SyncPlayChatMessage>? _syncChatSubscription;
   StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
+  StreamSubscription<SyncPlayInvite>? _pendingInviteSubscription;
   late final Object _chatSurfaceToken;
   late final mobx.ReactionDisposer _pipModeListener;
 
@@ -96,12 +99,19 @@ class _VideoPageState extends State<VideoPage>
   void initState() {
     super.initState();
     _chatSurfaceToken = roomSession.registerChatSurface();
+    playerController.resetSyncPlayChatEntryPrompt();
     videoPageController.applyPlaybackArgs(widget.args);
     windowManager.addListener(this);
     // Window fullscreen can be changed outside this page through system chrome.
     videoPageController.isDesktopFullscreen();
     tabController = TabController(length: 3, vsync: this);
     tabController.addListener(handleTabChanged);
+    _pendingInviteSubscription =
+        inviteService.pendingStream.listen(_handlePendingInvite);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = inviteService.pending;
+      if (pending != null) unawaited(_handlePendingInvite(pending));
+    });
     observerController = GridObserverController(controller: scrollController);
     animation = AnimationController(
       duration: _sideTabAnimationDuration,
@@ -173,6 +183,8 @@ class _VideoPageState extends State<VideoPage>
         // PR1 keeps media events UI-neutral.  A future room page can render a
         // mismatch or follow prompt without changing the player lifecycle.
         break;
+      case SyncPlayRoomRemotePlaybackChanged():
+        break;
     }
   }
 
@@ -215,27 +227,6 @@ class _VideoPageState extends State<VideoPage>
       _initOnlineMode(playerController);
     }
 
-    _syncChatSubscription =
-        playerController.syncplay.chatStream.listen((event) {
-      final localUsername =
-          playerController.syncplay.syncplayController?.username ?? '';
-      final String displayText = '${event.username}：${event.message}';
-
-      if (playerController.syncplay.chatDanmakuEnabled &&
-          playerController.danmaku.danmakuOn &&
-          event.username != localUsername &&
-          event.fromRemote) {
-        playerController.danmaku.canvasController.addDanmaku(
-          DanmakuContentItem(
-            displayText,
-            color: Colors.orange,
-            isColorful: true,
-            type: DanmakuItemType.bottom,
-            extra: DateTime.now().millisecondsSinceEpoch,
-          ),
-        );
-      }
-    });
   }
 
   void _initOfflineMode(PlayerController playerController) {
@@ -316,10 +307,10 @@ class _VideoPageState extends State<VideoPage>
       animation.dispose();
     } catch (_) {}
     try {
-      _syncChatSubscription?.cancel();
+      _syncNoticeSubscription?.cancel();
     } catch (_) {}
     try {
-      _syncNoticeSubscription?.cancel();
+      _pendingInviteSubscription?.cancel();
     } catch (_) {}
     try {
       _logSubscription?.cancel();
@@ -355,15 +346,58 @@ class _VideoPageState extends State<VideoPage>
   }
 
   void openSyncPlayChat() {
+    unawaited(_openSyncPlayChat(forcePrompt: true));
+  }
+
+  Future<bool> _ensureSyncPlayQuickChatReady() async {
+    if (videoPageController.isPip) return false;
+    final ready = await playerController.ensureSyncPlayChatReady(
+      forcePrompt: true,
+      promptJoin: () async {
+        if (!mounted) return;
+        await showSyncPlaySheet(
+          context,
+          playerController: playerController,
+          changeEpisode: changeEpisode,
+        );
+      },
+    );
+    if (!mounted) return false;
+    final session = playerController.syncplay;
+    final connecting = session.connectionState ==
+            SyncPlayConnectionState.connecting ||
+        session.connectionState == SyncPlayConnectionState.reconnecting;
+    return ready || session.isChatConnected || session.hasSession || connecting;
+  }
+
+  Future<void> _openSyncPlayChat({required bool forcePrompt}) async {
     if (videoPageController.isPip) {
       return;
     }
-    if (playerController.syncplay.syncplayRoom.isEmpty) {
-      showSyncPlaySheet(
-        context,
-        playerController: playerController,
-        changeEpisode: changeEpisode,
-      );
+    final ready = await playerController.ensureSyncPlayChatReady(
+      forcePrompt: forcePrompt,
+      promptJoin: () async {
+        if (!mounted) {
+          return;
+        }
+        await showSyncPlaySheet(
+          context,
+          playerController: playerController,
+          changeEpisode: changeEpisode,
+        );
+      },
+    );
+    if (!mounted) {
+      return;
+    }
+    final session = playerController.syncplay;
+    final connecting = session.connectionState ==
+            SyncPlayConnectionState.connecting ||
+        session.connectionState == SyncPlayConnectionState.reconnecting;
+    if (!ready &&
+        !session.isChatConnected &&
+        !session.hasSession &&
+        !connecting) {
       return;
     }
     if (tabController.index != 2) {
@@ -374,6 +408,10 @@ class _VideoPageState extends State<VideoPage>
     } else {
       syncChatVisibility();
     }
+  }
+
+  void _joinSyncPlayRoomFromChat() {
+    unawaited(_openSyncPlayChat(forcePrompt: true));
   }
 
   void syncChatVisibility() {
@@ -390,25 +428,14 @@ class _VideoPageState extends State<VideoPage>
     );
   }
 
-  void enableGlobalDanmakuForChat() {
-    if (playerController.danmaku.danmakuOn) {
-      return;
-    }
-    KazumiDialog.showToast(message: '需先开启总弹幕');
-    playerController.danmaku.setDanmakuEnabled(true);
-    try {
-      unawaited(
-        GStorage.putSetting(SettingsKeys.danmakuEnabledByDefault, true),
-      );
-    } catch (_) {}
-  }
-
   void handleTabChanged() {
     if (!mounted) {
       return;
     }
     if (tabController.index == 0) {
       menuJumpToCurrentEpisode();
+    } else if (tabController.index == 2) {
+      unawaited(_openSyncPlayChat(forcePrompt: false));
     }
     syncChatVisibility();
   }
@@ -601,58 +628,58 @@ class _VideoPageState extends State<VideoPage>
     }
   }
 
+  Future<void> _handlePendingInvite(SyncPlayInvite invite) async {
+    if (!mounted) return;
+    if (invite.bangumi != null &&
+        invite.bangumi != playerController.currentBangumiId) {
+      KazumiDialog.showToast(message: '邀请对应其他番剧，请先打开对应作品');
+      return;
+    }
+    if (invite.episode != null &&
+        invite.episode != playerController.currentPlaybackEpisode) {
+      KazumiDialog.showToast(message: '邀请对应第 ${invite.episode} 集，请先手动切换剧集');
+      return;
+    }
+    await GStorage.putSetting<String>(
+      SettingsKeys.syncPlayEndPoint,
+      invite.server,
+    );
+    var username =
+        GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
+    if (username.isEmpty) {
+      username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
+      await GStorage.putSetting<String>(
+        SettingsKeys.syncPlayUserName,
+        username,
+      );
+    }
+    await playerController.createSyncPlayRoom(
+      invite.room,
+      username,
+      changeEpisode,
+    );
+    if (roomSession.connectionState == SyncPlayConnectionState.connected) {
+      inviteService.takePending();
+    }
+  }
+
   bool sendDanmaku(String msg) {
     keyboardFocus.requestFocus();
-    final destination = playerController.danmaku.danmakuDestination;
-
-    if (destination == DanmakuDestination.chatRoom) {
-      if (msg.trim().isEmpty) {
-        KazumiDialog.showToast(message: '聊天内容为空');
-        return false;
-      }
-      if (msg.length > playerController.syncplay.chatMessageLengthLimit) {
-        KazumiDialog.showToast(message: '聊天内容过长');
-        return false;
-      }
-      if (!playerController.syncplay.isChatConnected) {
-        KazumiDialog.showToast(message: '你还没有加入一起看，无法发送聊天室弹幕');
-        return false;
-      }
-
-      final sender =
-          playerController.syncplay.syncplayController?.username ?? '我';
-      final String displayText = '$sender：$msg';
-
-      playerController.danmaku.canvasController.addDanmaku(
-        DanmakuContentItem(
-          displayText,
-          color: Colors.orange,
-          isColorful: true,
-          type: DanmakuItemType.bottom,
-          extra: DateTime.now().millisecondsSinceEpoch,
-        ),
-      );
-
-      unawaited(playerController.sendSyncPlayChatMessage(msg));
-    } else {
-      if (msg.isEmpty) {
-        KazumiDialog.showToast(message: '弹幕内容为空');
-        return false;
-      } else if (msg.length > 100) {
-        KazumiDialog.showToast(message: '弹幕内容过长');
-        return false;
-      }
-      if (playerController.danmaku.danDanmakus.isEmpty) {
-        KazumiDialog.showToast(
-          message: '当前剧集不支持弹幕发送的说',
-        );
-        return false;
-      }
-      // The remote danmaku provider does not expose a send API here; render the
-      // local echo so the user still sees their message immediately.
-      playerController.danmaku.canvasController
-          .addDanmaku(DanmakuContentItem(msg, selfSend: true));
+    if (msg.isEmpty) {
+      KazumiDialog.showToast(message: '弹幕内容为空');
+      return false;
+    } else if (msg.length > 100) {
+      KazumiDialog.showToast(message: '弹幕内容过长');
+      return false;
     }
+    if (playerController.danmaku.danDanmakus.isEmpty) {
+      KazumiDialog.showToast(
+        message: '当前剧集不支持弹幕发送的说',
+      );
+      return false;
+    }
+    playerController.danmaku.canvasController
+        .addDanmaku(DanmakuContentItem(msg, selfSend: true));
 
     return true;
   }
@@ -663,69 +690,7 @@ class _VideoPageState extends State<VideoPage>
     if (!mounted || message == null) {
       return;
     }
-    await showDanmakuDestinationPickerAndSend(message);
-  }
-
-  Future<bool> showDanmakuDestinationPickerAndSend(String msg) async {
-    if (msg.trim().isEmpty) {
-      KazumiDialog.showToast(message: '弹幕内容为空');
-      return false;
-    }
-
-    final DanmakuDestination? result =
-        await showAdaptiveBottomSheet<DanmakuDestination>(
-      context: context,
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              MaterialBottomSheetHeader(
-                title: '发送弹幕至',
-                description: '选择这条弹幕的发送位置',
-                onClose: () => Navigator.of(context).pop(),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: MaterialBottomSheetGroup(
-                  title: '发送位置',
-                  children: [
-                    ListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16),
-                      leading: const Icon(Icons.groups_rounded),
-                      title: const Text('发送到聊天室'),
-                      subtitle: const Text('同步观看成员均可看到'),
-                      onTap: () => Navigator.of(context)
-                          .pop(DanmakuDestination.chatRoom),
-                    ),
-                    ListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16),
-                      leading: const Icon(Icons.cloud_upload_rounded),
-                      title: const Text('发送到远程弹幕库'),
-                      subtitle: const Text('作为视频弹幕发送'),
-                      onTap: () => Navigator.of(context)
-                          .pop(DanmakuDestination.remoteDanmaku),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (result == null || !mounted) {
-      return false;
-    }
-
-    setState(() {});
-    playerController.danmaku.danmakuDestination = result;
-    return sendDanmaku(msg);
+    sendDanmaku(message);
   }
 
   @override
@@ -1009,9 +974,9 @@ class _VideoPageState extends State<VideoPage>
                   keyboardFocus: keyboardFocus,
                   sendDanmaku: sendDanmaku,
                   openSyncPlayChat: openSyncPlayChat,
+                  ensureSyncPlayQuickChatReady:
+                      _ensureSyncPlayQuickChatReady,
                   disableAnimations: disableAnimations,
-                  showDanmakuDestinationPickerAndSend:
-                      showDanmakuDestinationPickerAndSend,
                   pauseForTimedShutdown: pauseForTimedShutdown,
                 ),
         ),
@@ -1317,7 +1282,8 @@ class _VideoPageState extends State<VideoPage>
           children: [
             Row(
               children: [
-                TabBar(
+                Flexible(
+                  child: TabBar(
                   controller: tabController,
                   dividerHeight: 0,
                   isScrollable: true,
@@ -1331,7 +1297,7 @@ class _VideoPageState extends State<VideoPage>
                       menuJumpToCurrentEpisode();
                     }
                   },
-                  tabs: [
+                    tabs: [
                     const Tab(text: '选集'),
                     const Tab(text: '评论'),
                     Observer(
@@ -1352,7 +1318,8 @@ class _VideoPageState extends State<VideoPage>
                         );
                       },
                     ),
-                  ],
+                    ],
+                  ),
                 ),
                 if (compactTabs)
                   AnimatedBuilder(
@@ -1368,6 +1335,11 @@ class _VideoPageState extends State<VideoPage>
                     },
                   ),
                 if (compactTabs) const Spacer(),
+                IconButton(
+                  tooltip: '关闭侧栏',
+                  onPressed: _hideTabBodyImmediately,
+                  icon: const Icon(Icons.close_rounded),
+                ),
                 const SizedBox(width: 8),
               ],
             ),
@@ -1413,13 +1385,13 @@ class _VideoPageState extends State<VideoPage>
                   ),
                   SyncPlayChatPanel(
                     controller: playerController.syncplay,
-                    onSend: playerController.trySendSyncPlayChatMessage,
+                    onSend: roomSession.trySendChatMessage,
+                    chatDanmakuController: playerController.chatDanmaku,
                     inviteTextBuilder: playerController.syncPlayInviteText,
                     compact: !isDesktop() && !isTablet(),
-                    globalDanmakuEnabled: danmakuOn,
-                    onEnableGlobalDanmaku: enableGlobalDanmakuForChat,
                     onReconnect: playerController.syncplay.retryConnection,
                     onClearHistory: playerController.syncplay.clearChatHistory,
+                    onJoinRoom: _joinSyncPlayRoomFromChat,
                   ),
                 ],
               ),

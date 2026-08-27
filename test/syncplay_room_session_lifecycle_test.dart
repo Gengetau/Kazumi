@@ -48,6 +48,43 @@ void main() {
     await controller.dispose();
   });
 
+  test('chat readiness prompts once until its page budget resets', () async {
+    final controller = SyncPlayRoomSessionController();
+    var prompts = 0;
+    Future<void> prompt() async => prompts++;
+
+    expect(await controller.ensureSyncPlayChatReady(promptJoin: prompt), isFalse);
+    expect(await controller.ensureSyncPlayChatReady(promptJoin: prompt), isFalse);
+    expect(prompts, 1);
+    controller.resetSyncPlayChatEntryPrompt();
+    expect(await controller.ensureSyncPlayChatReady(promptJoin: prompt), isFalse);
+    expect(prompts, 2);
+    await controller.dispose();
+  });
+
+  test('deduplicates protocol-confirmed remote playback notices', () async {
+    final client = FakeSyncplayClient(acceptedUsername: 'alice');
+    final controller = _controllerFor([client]);
+    await controller.createRoom('room-a', 'alice');
+
+    client.emitPosition(position: 10, paused: false, setBy: 'friend');
+    await _settle();
+    client.emitPosition(position: 10, paused: true, setBy: 'friend');
+    client.emitPosition(position: 10, paused: true, setBy: 'friend');
+    client.emitPosition(
+      position: 40,
+      paused: true,
+      doSeek: true,
+      setBy: 'friend',
+    );
+    await _settle();
+
+    final notices = controller.chatMessages
+        .where((message) => message.message == 'friend 已暂停播放');
+    expect(notices, hasLength(1));
+    await _disposeController(controller, [client]);
+  });
+
   test('connects a room without a playback binding', () async {
     final client = FakeSyncplayClient();
     final controller = _controllerFor([client]);

@@ -31,3 +31,19 @@ final class SyncPlayRoomInitialSync extends SyncPlayRoomNotice {
 
   const SyncPlayRoomInitialSync(this.username);
 }
+
+final class SyncPlayRoomRemotePlaybackChanged extends SyncPlayRoomNotice {
+  final String actor;
+  final bool paused;
+  final Duration position;
+  final SyncPlayRoomPlaybackSnapshot snapshot;
+
+  const SyncPlayRoomRemotePlaybackChanged({
+    required this.actor,
+    required this.paused,
+    required this.position,
+    required this.snapshot,
+  });
+
+  bool get playing => !paused;
+}

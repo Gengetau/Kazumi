@@ -137,6 +137,10 @@ abstract class _PlayerSyncPlayController with Store {
   String _requestedUsername = '';
   bool _connectionLossHandled = false;
   Future<void>? _retryFuture;
+  bool _chatEntryPromptShown = false;
+  bool? _lastConfirmedProtocolPaused;
+  String? _lastPlaybackNoticeFingerprint;
+  DateTime? _lastPlaybackNoticeAt;
   int _nextChatMessageId = 1;
   final Set<int> _unreadChatMessageIds = <int>{};
   final Set<int> _unreadMentionMessageIds = <int>{};
@@ -145,6 +149,34 @@ abstract class _PlayerSyncPlayController with Store {
   static const int maxChatMessageLength = 500;
 
   int get chatMessageLengthLimit => maxChatMessageLength;
+
+  Future<bool> ensureSyncPlayChatReady({
+    required Future<void> Function() promptJoin,
+    bool forcePrompt = false,
+  }) async {
+    if (isChatConnected) {
+      _chatEntryPromptShown = false;
+      return true;
+    }
+    if (!forcePrompt && _chatEntryPromptShown) {
+      return false;
+    }
+    _chatEntryPromptShown = true;
+    await promptJoin();
+    return isChatConnected;
+  }
+
+  void resetSyncPlayChatEntryPrompt() {
+    _chatEntryPromptShown = false;
+  }
+
+  bool? get lastConfirmedProtocolPaused => _lastConfirmedProtocolPaused;
+
+  void resetPlaybackNoticeBaseline() {
+    _lastConfirmedProtocolPaused = null;
+    _lastPlaybackNoticeFingerprint = null;
+    _lastPlaybackNoticeAt = null;
+  }
 
   String get activeChatRoom => _activeChatRoom;
 
@@ -287,6 +319,7 @@ abstract class _PlayerSyncPlayController with Store {
     _playbackSnapshot = null;
     currentMedia = null;
     _mediaGeneration = 0;
+    resetPlaybackNoticeBaseline();
   }
 
   void appendUserMessage({
@@ -561,6 +594,7 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayRoom = '';
     syncplayClientRtt = 0;
     beginChatSession(room, preserveHistory: preserveChatHistory);
+    resetPlaybackNoticeBaseline();
     await previousClient?.disconnect();
     if (session.isStale) {
       return;
@@ -672,6 +706,7 @@ abstract class _PlayerSyncPlayController with Store {
           final binding = _playbackBinding;
           final snapshot = _snapshotFromPositionMessage(message);
           _playbackSnapshot = snapshot;
+          _handleRemotePlaybackNotice(snapshot);
           final attachment = binding == null
               ? null
               : SyncPlayPlaybackAttachment(
@@ -771,6 +806,7 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
+    resetPlaybackNoticeBaseline();
     connectionState = SyncPlayConnectionState.reconnecting;
     appendSystemMessage('连接已中断');
     _emitNotice(SyncPlayRoomReconnecting());
@@ -814,6 +850,45 @@ abstract class _PlayerSyncPlayController with Store {
     );
   }
 
+  void _handleRemotePlaybackNotice(SyncPlayRoomPlaybackSnapshot snapshot) {
+    final actor = normalizeSyncPlayUsername(snapshot.setBy, fallback: '');
+    final roundedPosition = snapshot.position.inMilliseconds / 1000;
+    final fingerprint =
+        '$actor|${snapshot.paused}|${roundedPosition.round()}';
+    final receivedAt = snapshot.receivedAt;
+    final previousPaused = _lastConfirmedProtocolPaused;
+    final isDuplicate = _lastPlaybackNoticeFingerprint == fingerprint &&
+        _lastPlaybackNoticeAt != null &&
+        receivedAt.difference(_lastPlaybackNoticeAt!).abs() <=
+            const Duration(milliseconds: 1100);
+
+    _lastConfirmedProtocolPaused = snapshot.paused;
+    _lastPlaybackNoticeFingerprint = fingerprint;
+    _lastPlaybackNoticeAt = receivedAt;
+
+    if (actor.isEmpty || isDuplicate || previousPaused == null) {
+      return;
+    }
+    final localUsername = confirmedUsername;
+    if (localUsername.isNotEmpty && actor == localUsername) {
+      return;
+    }
+    if (previousPaused == snapshot.paused) {
+      return;
+    }
+
+    final notice = SyncPlayRoomRemotePlaybackChanged(
+      actor: actor,
+      paused: snapshot.paused,
+      position: snapshot.position,
+      snapshot: snapshot,
+    );
+    appendSystemMessage(
+      snapshot.paused ? '$actor 已暂停播放' : '$actor 开始播放',
+    );
+    _emitNotice(notice);
+  }
+
   Future<void> _applyRemotePlaybackSnapshot(
     SyncPlayPlaybackAttachment attachment,
     SyncPlayRoomPlaybackSnapshot snapshot,
@@ -847,6 +922,7 @@ abstract class _PlayerSyncPlayController with Store {
     if (reference == null) {
       return;
     }
+    resetPlaybackNoticeBaseline();
     final rawSetBy = message['setBy'];
     final selectedBy = rawSetBy is String ? rawSetBy : '';
     final media = SyncPlayRoomMedia(
@@ -1012,6 +1088,7 @@ abstract class _PlayerSyncPlayController with Store {
   @action
   Future<void> exitRoom() async {
     await _disconnect(clearChatSession: true);
+    resetSyncPlayChatEntryPrompt();
   }
 
   Future<void> _disconnect({

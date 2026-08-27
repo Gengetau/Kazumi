@@ -4,10 +4,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
+import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/dialog/material_bottom_sheet.dart';
+import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -203,6 +206,64 @@ class _SyncPlayHomeSheet extends StatelessWidget {
   const _SyncPlayHomeSheet({required this.playerController});
 
   final PlayerController playerController;
+
+  Future<void> _joinFromClipboard(BuildContext context) async {
+    final service = inject<SyncPlayClipboardInviteService>();
+    final candidate = await service.check();
+    if (!context.mounted) return;
+    if (candidate == null) {
+      KazumiDialog.showToast(context: context, message: '剪贴板中没有有效的一起看邀请');
+      return;
+    }
+    final invite = candidate.invite;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('从剪贴板加入'),
+        content: Text('房间：${invite.room}\n服务器：${invite.server}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('加入'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !context.mounted) {
+      service.rejectCandidate();
+      return;
+    }
+    var confirmUnknown = false;
+    if (service.candidateNeedsServerConfirmation) {
+      confirmUnknown = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('确认自定义服务器'),
+              content: Text('邀请将连接到 ${invite.server}，是否继续？'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('继续'),
+                ),
+              ],
+            ),
+          ) ==
+          true;
+    }
+    if (!service.acceptCandidate(confirmUnknownServer: confirmUnknown)) {
+      service.rejectCandidate();
+      return;
+    }
+    if (context.mounted) Navigator.of(context).pop();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -404,6 +465,12 @@ class _SyncPlayHomeSheet extends StatelessWidget {
           const SizedBox(height: 12),
           join,
         ],
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => _joinFromClipboard(context),
+          icon: const Icon(Icons.content_paste_go_rounded),
+          label: const Text('从剪贴板加入'),
+        ),
         const SizedBox(height: 16),
         Material(
           color: colorScheme.surfaceContainerLow,

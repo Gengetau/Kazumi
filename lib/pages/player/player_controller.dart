@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/services/player/external_playback_launcher.dart';
 import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
+import 'package:kazumi/pages/player/controller/player_chat_danmaku_controller.dart';
 import 'package:kazumi/pages/player/controller/player_debug_controller.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_seek_controller.dart';
@@ -22,6 +23,7 @@ import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/services/player/audio_controller.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -39,6 +41,14 @@ class PlayerController implements Disposable {
       downloadController: downloadController,
     );
     syncplay.loadChatDanmakuSetting();
+    chatDanmaku = PlayerChatDanmakuController(
+      initialEnabled: syncplay.chatDanmakuEnabled,
+      onEnabledChanged: syncplay.setChatDanmakuEnabled,
+    );
+    _chatDanmakuSubscription = syncplay.chatStream.listen((message) {
+      if (!message.fromRemote) return;
+      chatDanmaku.addMessage(message.message, username: message.username);
+    });
   }
 
   final ShaderAssetService shaderAssetService;
@@ -49,6 +59,9 @@ class PlayerController implements Disposable {
   final PlayerDebugController debug = PlayerDebugController();
 
   late final PlayerDanmakuController danmaku;
+  late final PlayerChatDanmakuController chatDanmaku;
+  late final StreamSubscription<SyncPlayChatMessage>
+      _chatDanmakuSubscription;
   late final PlayerPlaybackController playback = PlayerPlaybackController(
     shaderAssetService: shaderAssetService,
     debug: debug,
@@ -411,6 +424,8 @@ class PlayerController implements Disposable {
   /// method returns.
   void beginShutdown() {
     _initializations.close();
+    unawaited(_chatDanmakuSubscription.cancel());
+    chatDanmaku.dispose();
     final attachment = _syncplayAttachment;
     if (attachment != null) {
       syncplay.detachPlayback(attachment);
@@ -538,6 +553,18 @@ class PlayerController implements Disposable {
     return syncplay.trySendChatMessage(message);
   }
 
+  Future<bool> ensureSyncPlayChatReady({
+    required Future<void> Function() promptJoin,
+    bool forcePrompt = false,
+  }) =>
+      syncplay.ensureSyncPlayChatReady(
+        promptJoin: promptJoin,
+        forcePrompt: forcePrompt,
+      );
+
+  void resetSyncPlayChatEntryPrompt() =>
+      syncplay.resetSyncPlayChatEntryPrompt();
+
   Future<void> sendSyncPlayChatMessage(String message) async {
     await trySendSyncPlayChatMessage(message);
   }
@@ -560,16 +587,27 @@ class PlayerController implements Disposable {
     // Hello. Keeping this empty while connecting prevents sharing a room
     // number that may have been rejected or renamed by the server.
     final room = syncplay.syncplayRoom;
+    final uri = room.isNotEmpty && episode > 0 && currentBangumiId > 0
+        ? SyncPlayInviteCodec.encode(
+            room: room,
+            server: endpoint,
+            episode: episode,
+            bangumi: currentBangumiId,
+          )
+        : '';
     return '''Kazumi 一起看邀请
 番剧：$title
+番剧 ID：$currentBangumiId
 剧集：第 $episode 集
 房间：$room
 服务器：$endpoint
+${uri.isEmpty ? '' : '$uri\n'}
 
 打开 Kazumi → 播放对应剧集 → 一起看 → 加入房间''';
   }
 
   Future<void> exitSyncPlayRoom() async {
     await syncplay.exitRoom();
+    resetSyncPlayChatEntryPrompt();
   }
 }

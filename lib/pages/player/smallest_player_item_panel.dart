@@ -7,6 +7,7 @@ import 'package:kazumi/pages/player/player_adjustment_hud.dart';
 import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/pages/player/player_panel_hold.dart';
+import 'package:kazumi/pages/player/syncplay_quick_chat_composer.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
@@ -43,6 +44,9 @@ class SmallestPlayerItemPanel extends StatefulWidget {
     required this.showVideoInfo,
     required this.showSyncPlayPanel,
     required this.openSyncPlayChat,
+    required this.ensureSyncPlayQuickChatReady,
+    required this.toggleMenu,
+    required this.keyboardFocus,
     required this.pauseForTimedShutdown,
     this.disableAnimations = false,
   });
@@ -66,6 +70,9 @@ class SmallestPlayerItemPanel extends StatefulWidget {
   final void Function() showVideoInfo;
   final void Function() showSyncPlayPanel;
   final VoidCallback openSyncPlayChat;
+  final Future<bool> Function() ensureSyncPlayQuickChatReady;
+  final VoidCallback toggleMenu;
+  final FocusNode keyboardFocus;
   final VoidCallback pauseForTimedShutdown;
   final bool disableAnimations;
 
@@ -506,6 +513,16 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
                 icon:
                     const Icon(Icons.picture_in_picture, color: Colors.white)),
           _buildDanmakuToggleButton(context),
+          SyncPlayQuickChatComposer(
+            compact: true,
+            ensureReady: widget.ensureSyncPlayQuickChatReady,
+            onSend: playerController.trySendSyncPlayChatMessage,
+            acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
+            restoreFocus: widget.keyboardFocus,
+            onOpen: () {
+              if (videoPageController.showTabBody) widget.toggleMenu();
+            },
+          ),
           PlayerPanelHoldCollectButton(
             acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
             bangumiItem: videoPageController.bangumiItem,

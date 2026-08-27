@@ -100,8 +100,6 @@ abstract class _PlayerDanmakuController with Store {
   bool danmakuOn = false;
   @observable
   bool danmakuLoading = false;
-  DanmakuDestination danmakuDestination = DanmakuDestination.remoteDanmaku;
-
   int bangumiID = 0;
   int _scheduledDanmakuGeneration = 0;
 

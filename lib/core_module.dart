@@ -14,6 +14,7 @@ import 'package:kazumi/services/player/audio_controller.dart';
 import 'package:kazumi/services/player/history_playback_service.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 
 /// Root-owned application data and cross-feature coordinators.
 ///
@@ -39,6 +40,9 @@ final coreModule = createModule(
       // attaches to the shared session and never owns its disposal.
       ..addSingleton<SyncPlayRoomSessionController>(
         SyncPlayRoomSessionController.new,
+      )
+      ..addSingleton<SyncPlayClipboardInviteService>(
+        SyncPlayClipboardInviteService.new,
       )
       // Cross-feature state and coordinators.
       ..addSingleton<PluginsController>(PluginsController.new)
