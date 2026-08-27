@@ -14,6 +14,7 @@ import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/utils/theme.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
 class AppWidget extends StatefulWidget {
   const AppWidget({super.key});
@@ -25,6 +26,8 @@ class AppWidget extends StatefulWidget {
 class _AppWidgetState extends State<AppWidget>
     with TrayListener, WidgetsBindingObserver, WindowListener {
   final TrayManager trayManager = TrayManager.instance;
+  SyncPlayRoomSessionController get roomSession =>
+      inject<SyncPlayRoomSessionController>();
   bool showingExitDialog = false;
   bool _didApplyStoredThemeSettings = false;
   Brightness? _lastTitleBarBrightness;
@@ -262,6 +265,7 @@ class _AppWidgetState extends State<AppWidget>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
+    roomSession.setAppForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.paused) {
       KazumiLogger()
           .i("AppLifecycleState.paused: Application moved to background");
@@ -271,6 +275,16 @@ class _AppWidgetState extends State<AppWidget>
     } else if (state == AppLifecycleState.inactive) {
       KazumiLogger().i("AppLifecycleState.inactive: Application is inactive");
     }
+  }
+
+  @override
+  void onWindowFocus() {
+    roomSession.setWindowFocused(true);
+  }
+
+  @override
+  void onWindowBlur() {
+    roomSession.setWindowFocused(false);
   }
 
   @override

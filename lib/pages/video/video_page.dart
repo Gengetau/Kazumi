@@ -56,7 +56,7 @@ class VideoPage extends StatefulWidget {
 }
 
 class _VideoPageState extends State<VideoPage>
-    with TickerProviderStateMixin, WindowListener, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WindowListener {
   PlayerController get playerController => widget.playerController;
   SyncPlayRoomSessionController get roomSession => widget.roomSession;
   VideoPageController get videoPageController => widget.videoPageController;
@@ -86,6 +86,7 @@ class _VideoPageState extends State<VideoPage>
 
   StreamSubscription<SyncPlayChatMessage>? _syncChatSubscription;
   StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
+  late final Object _chatSurfaceToken;
   late final mobx.ReactionDisposer _pipModeListener;
 
   static const Duration _offlinePlayerInitDelay = Duration(milliseconds: 400);
@@ -94,8 +95,8 @@ class _VideoPageState extends State<VideoPage>
   @override
   void initState() {
     super.initState();
+    _chatSurfaceToken = roomSession.registerChatSurface();
     videoPageController.applyPlaybackArgs(widget.args);
-    WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
     // Window fullscreen can be changed outside this page through system chrome.
     videoPageController.isDesktopFullscreen();
@@ -308,7 +309,6 @@ class _VideoPageState extends State<VideoPage>
     try {
       windowManager.removeListener(this);
     } catch (_) {}
-    WidgetsBinding.instance.removeObserver(this);
     try {
       scrollController.dispose();
     } catch (_) {}
@@ -326,7 +326,7 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     _pipModeListener();
     tabController.removeListener(handleTabChanged);
-    playerController.syncplay.setChatVisible(false);
+    roomSession.unregisterChatSurface(_chatSurfaceToken);
     // Cancellation and log-stream teardown happen in VideoPageController's
     // own dispose when Modular releases the route scope.
     if (!isDesktop()) {
@@ -351,26 +351,6 @@ class _VideoPageState extends State<VideoPage>
   @override
   void onWindowLeaveFullScreen() {
     videoPageController.handleOnExitFullScreen();
-    syncChatVisibility();
-  }
-
-  @override
-  void onWindowFocus() {
-    playerController.syncplay.setWindowFocused(true);
-    syncChatVisibility();
-  }
-
-  @override
-  void onWindowBlur() {
-    playerController.syncplay.setWindowFocused(false);
-    syncChatVisibility();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    playerController.syncplay
-        .setAppForeground(state == AppLifecycleState.resumed);
     syncChatVisibility();
   }
 
@@ -404,7 +384,8 @@ class _VideoPageState extends State<VideoPage>
     final bool contentVisible = _isSideTabLayout
         ? videoPageController.showTabBody && _tabBodyTargetVisible
         : videoPageController.showTabBody && !videoPageController.isFullscreen;
-    playerController.syncplay.setChatVisible(
+    roomSession.setChatSurfaceVisible(
+      _chatSurfaceToken,
       chatTabVisible && contentVisible && !videoPageController.isPip,
     );
   }

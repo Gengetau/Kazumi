@@ -113,7 +113,9 @@ abstract class _PlayerSyncPlayController with Store {
 
   @observable
   bool windowFocused = true;
-  bool _chatVisibilityRequested = false;
+  final Set<Object> _chatSurfaces = <Object>{};
+  final Set<Object> _visibleChatSurfaces = <Object>{};
+  final Object _legacyChatSurfaceToken = Object();
 
   @observable
   bool chatDanmakuEnabled = true;
@@ -356,9 +358,45 @@ abstract class _PlayerSyncPlayController with Store {
     }
   }
 
-  void setChatVisible(bool visible) {
-    _chatVisibilityRequested = visible;
+  /// Registers a chat UI surface with this app-scoped room session.
+  ///
+  /// Each surface owns its token. This lets a room page and a player page
+  /// coexist without one page's disposal hiding the other page's chat.
+  Object registerChatSurface() {
+    final token = Object();
+    _chatSurfaces.add(token);
+    return token;
+  }
+
+  /// Updates visibility for one previously registered chat surface.
+  void setChatSurfaceVisible(Object token, bool visible) {
+    if (!_chatSurfaces.contains(token)) {
+      return;
+    }
+    if (visible) {
+      _visibleChatSurfaces.add(token);
+    } else {
+      _visibleChatSurfaces.remove(token);
+    }
     _updateChatVisibility();
+  }
+
+  /// Removes a chat surface and its visibility state.
+  void unregisterChatSurface(Object token) {
+    final wasRegistered = _chatSurfaces.remove(token);
+    final wasVisible = _visibleChatSurfaces.remove(token);
+    if (wasRegistered || wasVisible) {
+      _updateChatVisibility();
+    }
+  }
+
+  /// Compatibility shim for existing non-UI callers and legacy tests.
+  ///
+  /// New UI code must use a token returned by [registerChatSurface].
+  @Deprecated('Use registerChatSurface and setChatSurfaceVisible instead.')
+  void setChatVisible(bool visible) {
+    _chatSurfaces.add(_legacyChatSurfaceToken);
+    setChatSurfaceVisible(_legacyChatSurfaceToken, visible);
   }
 
   void setAppForeground(bool foreground) {
@@ -372,7 +410,8 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void _updateChatVisibility() {
-    final visible = _chatVisibilityRequested && appForeground && windowFocused;
+    final visible =
+        _visibleChatSurfaces.isNotEmpty && appForeground && windowFocused;
     chatVisible = visible;
     if (visible) {
       markChatRead();
