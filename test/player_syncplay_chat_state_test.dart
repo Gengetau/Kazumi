@@ -117,6 +117,39 @@ void main() {
     await controller.dispose();
   });
 
+  test('chat visibility follows app foreground and window focus', () async {
+    final controller = _controller();
+    controller.setChatVisible(true);
+    expect(controller.chatVisible, isTrue);
+
+    controller.setAppForeground(false);
+    expect(controller.chatVisible, isFalse);
+    controller.setAppForeground(true);
+    expect(controller.chatVisible, isTrue);
+
+    controller.setWindowFocused(false);
+    expect(controller.chatVisible, isFalse);
+    controller.setWindowFocused(true);
+    expect(controller.chatVisible, isTrue);
+    await controller.dispose();
+  });
+
+  test('clears local history without leaving the room', () async {
+    final controller = _controller();
+    controller.beginChatSession('room');
+    controller.appendUserMessage(
+      username: 'friend',
+      message: 'hello',
+      fromRemote: true,
+    );
+    controller.clearChatHistory();
+
+    expect(controller.chatMessages, isEmpty);
+    expect(controller.activeChatRoom, 'room');
+    expect(controller.unreadChatCount, 0);
+    await controller.dispose();
+  });
+
   test('chat history is capped at 300 messages', () async {
     final controller = _controller();
     for (var i = 0; i < 301; i++) {

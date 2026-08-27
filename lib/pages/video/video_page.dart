@@ -52,7 +52,7 @@ class VideoPage extends StatefulWidget {
 }
 
 class _VideoPageState extends State<VideoPage>
-    with TickerProviderStateMixin, WindowListener {
+    with TickerProviderStateMixin, WindowListener, WidgetsBindingObserver {
   PlayerController get playerController => widget.playerController;
   VideoPageController get videoPageController => widget.videoPageController;
   bool _didInitializePlayback = false;
@@ -89,6 +89,7 @@ class _VideoPageState extends State<VideoPage>
   void initState() {
     super.initState();
     videoPageController.applyPlaybackArgs(widget.args);
+    WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
     // Window fullscreen can be changed outside this page through system chrome.
     videoPageController.isDesktopFullscreen();
@@ -259,6 +260,7 @@ class _VideoPageState extends State<VideoPage>
     try {
       windowManager.removeListener(this);
     } catch (_) {}
+    WidgetsBinding.instance.removeObserver(this);
     try {
       scrollController.dispose();
     } catch (_) {}
@@ -301,6 +303,26 @@ class _VideoPageState extends State<VideoPage>
     syncChatVisibility();
   }
 
+  @override
+  void onWindowFocus() {
+    playerController.syncplay.setWindowFocused(true);
+    syncChatVisibility();
+  }
+
+  @override
+  void onWindowBlur() {
+    playerController.syncplay.setWindowFocused(false);
+    syncChatVisibility();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    playerController.syncplay
+        .setAppForeground(state == AppLifecycleState.resumed);
+    syncChatVisibility();
+  }
+
   void openSyncPlayChat() {
     if (videoPageController.isPip) {
       return;
@@ -332,8 +354,23 @@ class _VideoPageState extends State<VideoPage>
         ? videoPageController.showTabBody && _tabBodyTargetVisible
         : videoPageController.showTabBody && !videoPageController.isFullscreen;
     playerController.syncplay.setChatVisible(
-      chatTabVisible && contentVisible && !videoPageController.isPip,
+      chatTabVisible &&
+          contentVisible &&
+          !videoPageController.isPip,
     );
+  }
+
+  void enableGlobalDanmakuForChat() {
+    if (playerController.danmaku.danmakuOn) {
+      return;
+    }
+    KazumiDialog.showToast(message: '需先开启总弹幕');
+    playerController.danmaku.setDanmakuEnabled(true);
+    try {
+      unawaited(
+        GStorage.putSetting(SettingsKeys.danmakuEnabledByDefault, true),
+      );
+    } catch (_) {}
   }
 
   void handleTabChanged() {
@@ -1177,6 +1214,52 @@ class _VideoPageState extends State<VideoPage>
     );
   }
 
+  Widget _buildMobileDanmakuCapsule(BuildContext context, bool danmakuOn) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(
+          color: danmakuOn
+              ? Theme.of(context).hintColor
+              : Theme.of(context).disabledColor,
+          width: 0.5,
+        ),
+      ),
+      child: GestureDetector(
+        onTap: () {
+          if (danmakuOn && !videoPageController.loading) {
+            showMobileDanmakuInput();
+          } else if (videoPageController.loading) {
+            KazumiDialog.showToast(message: '请等待视频加载完成');
+          } else {
+            KazumiDialog.showToast(message: '请先打开弹幕');
+          }
+        },
+        child: Row(
+          children: [
+            Text(
+              danmakuOn ? '  点我发弹幕  ' : '  已关闭弹幕  ',
+              softWrap: false,
+              overflow: TextOverflow.clip,
+              style: TextStyle(
+                color: danmakuOn
+                    ? Theme.of(context).hintColor
+                    : Theme.of(context).disabledColor,
+              ),
+            ),
+            if (danmakuOn)
+              Icon(
+                Icons.send_rounded,
+                size: 20,
+                color: Theme.of(context).hintColor,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget get tabBody {
     final bool danmakuOn = playerController.danmaku.danmakuOn;
     final int episodeNum = videoPageController.commentsEpisode;
@@ -1206,58 +1289,37 @@ class _VideoPageState extends State<VideoPage>
                       menuJumpToCurrentEpisode();
                     }
                   },
-                  tabs: const [
-                    Tab(text: '选集'),
-                    Tab(text: '评论'),
-                    Tab(text: '聊天'),
+                  tabs: [
+                    const Tab(text: '选集'),
+                    const Tab(text: '评论'),
+                    Observer(
+                      builder: (context) {
+                        final unread =
+                            playerController.syncplay.unreadChatCount;
+                        return Tab(
+                          child: Badge(
+                            isLabelVisible: unread > 0,
+                            label: Text(unread > 99 ? '99+' : '$unread'),
+                            child: const Text('聊天'),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
-                if (compactTabs) ...[
-                  const Spacer(),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(25),
-                      border: Border.all(
-                        color: danmakuOn
-                            ? Theme.of(context).hintColor
-                            : Theme.of(context).disabledColor,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: GestureDetector(
-                      onTap: () {
-                        if (danmakuOn && !videoPageController.loading) {
-                          showMobileDanmakuInput();
-                        } else if (videoPageController.loading) {
-                          KazumiDialog.showToast(message: '请等待视频加载完成');
-                        } else {
-                          KazumiDialog.showToast(message: '请先打开弹幕');
-                        }
-                      },
-                      child: Row(
-                        children: [
-                          Text(
-                            danmakuOn ? '  点我发弹幕  ' : '  已关闭弹幕  ',
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                            style: TextStyle(
-                              color: danmakuOn
-                                  ? Theme.of(context).hintColor
-                                  : Theme.of(context).disabledColor,
-                            ),
-                          ),
-                          if (danmakuOn)
-                            Icon(
-                              Icons.send_rounded,
-                              size: 20,
-                              color: Theme.of(context).hintColor,
-                            ),
-                        ],
-                      ),
-                    ),
+                if (compactTabs)
+                  AnimatedBuilder(
+                    animation: tabController,
+                    builder: (context, child) {
+                      final hideForMobileChat =
+                          !isDesktop() && !isTablet() && tabController.index == 2;
+                      if (hideForMobileChat) {
+                        return const SizedBox.shrink();
+                      }
+                      return _buildMobileDanmakuCapsule(context, danmakuOn);
+                    },
                   ),
-                ],
+                if (compactTabs) const Spacer(),
                 const SizedBox(width: 8),
               ],
             ),
@@ -1305,6 +1367,12 @@ class _VideoPageState extends State<VideoPage>
                     controller: playerController.syncplay,
                     onSend: playerController.trySendSyncPlayChatMessage,
                     inviteTextBuilder: playerController.syncPlayInviteText,
+                    compact: compactTabs && !isDesktop() && !isTablet(),
+                    globalDanmakuEnabled: danmakuOn,
+                    onEnableGlobalDanmaku: enableGlobalDanmakuForChat,
+                    onReconnect: playerController.syncplay.retryConnection,
+                    onClearHistory:
+                        playerController.syncplay.clearChatHistory,
                   ),
                 ],
               ),

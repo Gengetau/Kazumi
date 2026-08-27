@@ -105,6 +105,38 @@ mixin _$PlayerSyncPlayController on _PlayerSyncPlayController, Store {
     });
   }
 
+  late final _$appForegroundAtom =
+      Atom(name: '_PlayerSyncPlayController.appForeground', context: context);
+
+  @override
+  bool get appForeground {
+    _$appForegroundAtom.reportRead();
+    return super.appForeground;
+  }
+
+  @override
+  set appForeground(bool value) {
+    _$appForegroundAtom.reportWrite(value, super.appForeground, () {
+      super.appForeground = value;
+    });
+  }
+
+  late final _$windowFocusedAtom =
+      Atom(name: '_PlayerSyncPlayController.windowFocused', context: context);
+
+  @override
+  bool get windowFocused {
+    _$windowFocusedAtom.reportRead();
+    return super.windowFocused;
+  }
+
+  @override
+  set windowFocused(bool value) {
+    _$windowFocusedAtom.reportWrite(value, super.windowFocused, () {
+      super.windowFocused = value;
+    });
+  }
+
   late final _$chatDanmakuEnabledAtom = Atom(
       name: '_PlayerSyncPlayController.chatDanmakuEnabled', context: context);
 
@@ -138,6 +170,8 @@ syncplayClientRtt: ${syncplayClientRtt},
 connectionState: ${connectionState},
 unreadChatCount: ${unreadChatCount},
 chatVisible: ${chatVisible},
+appForeground: ${appForeground},
+windowFocused: ${windowFocused},
 chatDanmakuEnabled: ${chatDanmakuEnabled}
     ''';
   }

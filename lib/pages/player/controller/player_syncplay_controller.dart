@@ -68,6 +68,13 @@ abstract class _PlayerSyncPlayController with Store {
   bool chatVisible = false;
 
   @observable
+  bool appForeground = true;
+
+  @observable
+  bool windowFocused = true;
+  bool _chatVisibilityRequested = false;
+
+  @observable
   bool chatDanmakuEnabled = true;
 
   String _activeChatRoom = '';
@@ -188,6 +195,23 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void setChatVisible(bool visible) {
+    _chatVisibilityRequested = visible;
+    _updateChatVisibility();
+  }
+
+  void setAppForeground(bool foreground) {
+    appForeground = foreground;
+    _updateChatVisibility();
+  }
+
+  void setWindowFocused(bool focused) {
+    windowFocused = focused;
+    _updateChatVisibility();
+  }
+
+  void _updateChatVisibility() {
+    final visible =
+        _chatVisibilityRequested && appForeground && windowFocused;
     chatVisible = visible;
     if (visible) {
       markChatRead();
@@ -202,6 +226,12 @@ abstract class _PlayerSyncPlayController with Store {
     chatMessages.clear();
     unreadChatCount = 0;
     _activeChatRoom = '';
+  }
+
+  /// Clears messages without leaving the currently joined room.
+  void clearChatHistory() {
+    chatMessages.clear();
+    unreadChatCount = 0;
   }
 
   void setChatDanmakuEnabled(bool enabled) {

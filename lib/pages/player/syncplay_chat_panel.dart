@@ -7,6 +7,13 @@ import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 import 'package:kazumi/utils/device.dart';
 
+enum SyncPlayChatHeaderAction {
+  copyInvite,
+  reconnect,
+  clearHistory,
+  toggleChatDanmaku,
+}
+
 /// The small command row above a chat room.
 ///
 /// Header owns the RTT observer. This keeps frequent position updates from
@@ -19,6 +26,10 @@ class SyncPlayChatHeader extends StatefulWidget {
     this.inviteTextBuilder,
     this.onCopyInvite,
     this.compact = false,
+    this.globalDanmakuEnabled = true,
+    this.onEnableGlobalDanmaku,
+    this.onReconnect,
+    this.onClearHistory,
   });
 
   final PlayerSyncPlayController controller;
@@ -26,6 +37,10 @@ class SyncPlayChatHeader extends StatefulWidget {
   final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
   final bool compact;
+  final bool globalDanmakuEnabled;
+  final VoidCallback? onEnableGlobalDanmaku;
+  final VoidCallback? onReconnect;
+  final VoidCallback? onClearHistory;
 
   @override
   State<SyncPlayChatHeader> createState() => _SyncPlayChatHeaderState();
@@ -71,6 +86,25 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
         setState(() => _copied = false);
       }
     });
+  }
+
+  void _selectAction(SyncPlayChatHeaderAction action, String room) {
+    switch (action) {
+      case SyncPlayChatHeaderAction.copyInvite:
+        _copyInvite(room);
+      case SyncPlayChatHeaderAction.reconnect:
+        widget.onReconnect?.call();
+      case SyncPlayChatHeaderAction.clearHistory:
+        widget.onClearHistory?.call();
+      case SyncPlayChatHeaderAction.toggleChatDanmaku:
+        if (!widget.globalDanmakuEnabled) {
+          widget.onEnableGlobalDanmaku?.call();
+        } else {
+          widget.controller.setChatDanmakuEnabled(
+            !widget.controller.chatDanmakuEnabled,
+          );
+        }
+    }
   }
 
   Widget _buildHeader(
@@ -128,25 +162,80 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
             ),
           ),
           if (!widget.compact) ...[
-            Text(
-              '聊天弹幕',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
+            Semantics(
+              enabled: widget.globalDanmakuEnabled,
+              label: widget.globalDanmakuEnabled ? '聊天弹幕' : '需先开启总弹幕',
+              child: GestureDetector(
+                onTap: widget.globalDanmakuEnabled
+                    ? null
+                    : widget.onEnableGlobalDanmaku,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '聊天弹幕',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    Switch(
+                      value:
+                          widget.globalDanmakuEnabled && chatDanmakuEnabled,
+                      onChanged: widget.globalDanmakuEnabled
+                          ? (_) {
+                              widget.controller.setChatDanmakuEnabled(
+                                !chatDanmakuEnabled,
+                              );
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
               ),
             ),
-            Switch(
-              value: chatDanmakuEnabled,
-              onChanged: widget.controller.setChatDanmakuEnabled,
-            ),
           ],
-          IconButton(
-            onPressed: room.isEmpty ? null : () => _copyInvite(room),
-            tooltip: '复制邀请',
-            icon: Icon(
-              _copied ? Icons.check_rounded : Icons.copy_rounded,
-              size: 18,
+          if (widget.compact)
+            PopupMenuButton<SyncPlayChatHeaderAction>(
+              onSelected: (action) => _selectAction(action, room),
+              tooltip: '聊天室操作',
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: SyncPlayChatHeaderAction.copyInvite,
+                  enabled: room.isNotEmpty,
+                  child: const Text('复制邀请'),
+                ),
+                PopupMenuItem(
+                  value: SyncPlayChatHeaderAction.reconnect,
+                  enabled: widget.onReconnect != null,
+                  child: const Text('重新连接'),
+                ),
+                PopupMenuItem(
+                  value: SyncPlayChatHeaderAction.clearHistory,
+                  enabled: widget.onClearHistory != null,
+                  child: const Text('清本地记录'),
+                ),
+                PopupMenuItem(
+                  value: SyncPlayChatHeaderAction.toggleChatDanmaku,
+                  child: Text(
+                    widget.globalDanmakuEnabled
+                        ? (widget.controller.chatDanmakuEnabled
+                            ? '关闭聊天弹幕'
+                            : '开启聊天弹幕')
+                        : '需先开启总弹幕',
+                  ),
+                ),
+              ],
+              icon: const Icon(Icons.more_vert_rounded),
+            )
+          else
+            IconButton(
+              onPressed: room.isEmpty ? null : () => _copyInvite(room),
+              tooltip: '复制邀请',
+              icon: Icon(
+                _copied ? Icons.check_rounded : Icons.copy_rounded,
+                size: 18,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -610,6 +699,10 @@ class SyncPlayChatPanel extends StatelessWidget {
     this.inviteTextBuilder,
     this.onCopyInvite,
     this.compact = false,
+    this.globalDanmakuEnabled = true,
+    this.onEnableGlobalDanmaku,
+    this.onReconnect,
+    this.onClearHistory,
   });
 
   final PlayerSyncPlayController controller;
@@ -618,6 +711,10 @@ class SyncPlayChatPanel extends StatelessWidget {
   final String Function()? inviteTextBuilder;
   final VoidCallback? onCopyInvite;
   final bool compact;
+  final bool globalDanmakuEnabled;
+  final VoidCallback? onEnableGlobalDanmaku;
+  final VoidCallback? onReconnect;
+  final VoidCallback? onClearHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -635,6 +732,10 @@ class SyncPlayChatPanel extends StatelessWidget {
               inviteTextBuilder: inviteTextBuilder,
               onCopyInvite: onCopyInvite,
               compact: compact,
+              globalDanmakuEnabled: globalDanmakuEnabled,
+              onEnableGlobalDanmaku: onEnableGlobalDanmaku,
+              onReconnect: onReconnect,
+              onClearHistory: onClearHistory,
             ),
             const Divider(height: 1),
             Expanded(
