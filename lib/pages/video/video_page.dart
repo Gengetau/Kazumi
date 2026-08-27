@@ -29,6 +29,7 @@ import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/services/player/timed_shutdown_service.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:mobx/mobx.dart' as mobx;
 
 class VideoPage extends StatefulWidget {
@@ -39,6 +40,7 @@ class VideoPage extends StatefulWidget {
     required this.videoPageController,
     required this.historyController,
     required this.downloadController,
+    required this.roomSession,
   });
 
   final VideoPlaybackArgs args;
@@ -46,6 +48,7 @@ class VideoPage extends StatefulWidget {
   final VideoPageController videoPageController;
   final HistoryController historyController;
   final DownloadController downloadController;
+  final SyncPlayRoomSessionController roomSession;
 
   @override
   State<VideoPage> createState() => _VideoPageState();
@@ -552,6 +555,10 @@ class _VideoPageState extends State<VideoPage>
       return;
     }
     _isClosing = true;
+    // PR1 keeps the historical VideoPage exit behaviour.  The app-scoped
+    // session itself is not owned by PlayerController, so leave the room
+    // explicitly before removing this route.
+    await roomSession.exitRoom();
     playerController.beginShutdown();
     if (!context.mounted) {
       return;

@@ -6,6 +6,7 @@ import 'package:kazumi/pages/route_error_page.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/pages/video/video_page.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
 final videoModule = createModule(
   path: '/video',
@@ -26,6 +27,7 @@ final videoModule = createModule(
           videoPageController: context.read<VideoPageController>(),
           historyController: inject<HistoryController>(),
           downloadController: inject<DownloadController>(),
+          roomSession: inject<SyncPlayRoomSessionController>(),
         );
       },
     );

@@ -18,28 +18,77 @@ class PlayerSyncPlayController = _PlayerSyncPlayController
 
 abstract class _PlayerSyncPlayController with Store {
   _PlayerSyncPlayController({
-    required this.bangumiId,
-    required this.currentEpisode,
-    required this.currentRoad,
-    required this.playing,
-    required this.currentPosition,
-    required this.playerPosition,
-    required this.duration,
-    required this.pause,
-    required this.play,
-    required this.seek,
-  });
+    int Function()? bangumiId,
+    int Function()? currentEpisode,
+    int Function()? currentRoad,
+    bool Function()? playing,
+    Duration Function()? currentPosition,
+    Duration Function()? playerPosition,
+    Duration Function()? duration,
+    Future<void> Function({bool enableSync})? pause,
+    Future<void> Function({bool enableSync})? play,
+    Future<void> Function(Duration duration, {bool enableSync})? seek,
+  })  : bangumiId = bangumiId ?? _zeroInt,
+        currentEpisode = currentEpisode ?? _zeroInt,
+        currentRoad = currentRoad ?? _zeroInt,
+        playing = playing ?? _false,
+        currentPosition = currentPosition ?? _zeroDuration,
+        playerPosition = playerPosition ?? _zeroDuration,
+        duration = duration ?? _zeroDuration,
+        pause = pause ?? _noopPlayback,
+        play = play ?? _noopPlayback,
+        seek = seek ?? _noopSeek;
 
-  final int Function() bangumiId;
-  final int Function() currentEpisode;
-  final int Function() currentRoad;
-  final bool Function() playing;
-  final Duration Function() currentPosition;
-  final Duration Function() playerPosition;
-  final Duration Function() duration;
-  final Future<void> Function({bool enableSync}) pause;
-  final Future<void> Function({bool enableSync}) play;
-  final Future<void> Function(Duration duration, {bool enableSync}) seek;
+  static int _zeroInt() => 0;
+
+  static bool _false() => false;
+
+  static Duration _zeroDuration() => Duration.zero;
+
+  static Future<void> _noopPlayback({bool enableSync = true}) async {}
+
+  static Future<void> _noopSeek(
+    Duration duration, {
+    bool enableSync = true,
+  }) async {}
+
+  // These callbacks are a short-lived compatibility bridge for the first
+  // ownership migration commit. They are replaced by an attachable binding in
+  // the next commit and are not used to own the session or its socket.
+  int Function() bangumiId;
+  int Function() currentEpisode;
+  int Function() currentRoad;
+  bool Function() playing;
+  Duration Function() currentPosition;
+  Duration Function() playerPosition;
+  Duration Function() duration;
+  Future<void> Function({bool enableSync}) pause;
+  Future<void> Function({bool enableSync}) play;
+  Future<void> Function(Duration duration, {bool enableSync}) seek;
+
+  void attachLegacyPlayback({
+    required int Function() bangumiId,
+    required int Function() currentEpisode,
+    required int Function() currentRoad,
+    required bool Function() playing,
+    required Duration Function() currentPosition,
+    required Duration Function() playerPosition,
+    required Duration Function() duration,
+    required Future<void> Function({bool enableSync}) pause,
+    required Future<void> Function({bool enableSync}) play,
+    required Future<void> Function(Duration duration, {bool enableSync}) seek,
+  }) {
+    this.bangumiId = bangumiId;
+    this.currentEpisode = currentEpisode;
+    this.currentRoad = currentRoad;
+    this.playing = playing;
+    this.currentPosition = currentPosition;
+    this.playerPosition = playerPosition;
+    this.duration = duration;
+    this.pause = pause;
+    this.play = play;
+    this.seek = seek;
+  }
 
   /// Set before the socket opens and cleared on teardown, so unlike
   /// [syncplayRoom] it also covers the window where the connection is still

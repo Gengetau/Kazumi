@@ -13,6 +13,7 @@ import 'package:kazumi/services/download/download_manager.dart';
 import 'package:kazumi/services/player/audio_controller.dart';
 import 'package:kazumi/services/player/history_playback_service.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
 /// Root-owned application data and cross-feature coordinators.
 ///
@@ -33,6 +34,12 @@ final coreModule = createModule(
       ..addSingleton<AudioController>(AudioController.new)
       ..addSingleton<HistoryPlaybackService>(HistoryPlaybackService.new)
       ..addSingleton<ShaderAssetService>(ShaderAssetService.new)
+      // The room socket and chat state outlive any individual player route.
+      // Keep this registration in the pathless app module so VideoPage only
+      // attaches to the shared session and never owns its disposal.
+      ..addSingleton<SyncPlayRoomSessionController>(
+        SyncPlayRoomSessionController.new,
+      )
       // Cross-feature state and coordinators.
       ..addSingleton<PluginsController>(PluginsController.new)
       ..addSingleton<CollectController>(CollectController.new)

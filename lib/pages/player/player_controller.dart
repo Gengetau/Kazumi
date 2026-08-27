@@ -14,6 +14,7 @@ import 'package:kazumi/pages/player/controller/player_panel_controller.dart';
 import 'package:kazumi/pages/player/controller/player_playback_controller.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
@@ -30,7 +31,23 @@ class PlayerController implements Disposable {
     this.shaderAssetService,
     DownloadController downloadController,
     this.audioController,
+    this.syncplay,
   ) {
+    // Compatibility bridge for the first app-scope migration commit. The
+    // following binding commit replaces this with attachPlayback and makes
+    // the lifetime explicit without passing player closures to construction.
+    syncplay.attachLegacyPlayback(
+      bangumiId: () => bangumiId,
+      currentEpisode: () => currentEpisode,
+      currentRoad: () => currentRoad,
+      playing: () => playback.playing,
+      currentPosition: () => playback.currentPosition,
+      playerPosition: () => playback.playerPosition,
+      duration: () => playback.duration,
+      pause: pause,
+      play: play,
+      seek: seek,
+    );
     danmaku = PlayerDanmakuController(
       isLocalPlayback: () => isLocalPlayback,
       downloadController: downloadController,
@@ -52,18 +69,9 @@ class PlayerController implements Disposable {
     videoUrl: () => videoUrl,
     isLocalPlayback: () => isLocalPlayback,
   );
-  late final PlayerSyncPlayController syncplay = PlayerSyncPlayController(
-    bangumiId: () => bangumiId,
-    currentEpisode: () => currentEpisode,
-    currentRoad: () => currentRoad,
-    playing: () => playback.playing,
-    currentPosition: () => playback.currentPosition,
-    playerPosition: () => playback.playerPosition,
-    duration: () => playback.duration,
-    pause: pause,
-    play: play,
-    seek: seek,
-  );
+  /// A shared app-scoped room session.  PlayerController never disposes it;
+  /// it only supplies temporary playback state while this route is active.
+  final SyncPlayRoomSessionController syncplay;
   late final PlayerSeekController seeking = PlayerSeekController(
     playback: playback,
     danmaku: danmaku,
@@ -405,7 +413,6 @@ class PlayerController implements Disposable {
   Future<void> _shutdownResources() async {
     await Future.wait([
       _releasePlaybackResources(),
-      syncplay.dispose(),
     ]);
   }
 
