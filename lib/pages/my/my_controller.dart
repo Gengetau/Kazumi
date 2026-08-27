@@ -11,6 +11,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:mobx/mobx.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/update/auto_updater.dart';
+import 'package:kazumi/utils/build_info.dart';
 
 part 'my_controller.g.dart';
 
@@ -151,6 +152,17 @@ abstract class _MyController with Store {
   }
 
   Future<bool> checkUpdate({String type = 'manual'}) async {
+    if (kSyncPlayTestBuild) {
+      KazumiLogger().i(
+        'Update: disabled for the unofficial SyncPlay test build '
+        '(Feature SHA: $kSyncPlayFeatureSha, Test SHA: $kSyncPlayTestSha)',
+      );
+      if (type == 'manual') {
+        KazumiDialog.showToast(message: 'SyncPlay 测试版已禁用官方应用更新');
+      }
+      return true;
+    }
+
     try {
       final autoUpdater = AutoUpdater();
 

@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "feature_source_sha": "9a93916425309c312ed4892fa764fa1ba510e1e4",
+  "entries": [
+    {
+      "path": "assets/images/logo/logo_android.png",
+      "sha256": "35205669868ac048287ef9e4043c8e081e84734e5a29add54aed8bf6ba7d77b5",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/logo/logo_ios.png",
+      "sha256": "35205669868ac048287ef9e4043c8e081e84734e5a29add54aed8bf6ba7d77b5",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/logo/logo_lanczos.ico",
+      "sha256": "a0b849b2e518f8d72b546115fcfbf608944e19cf9c140b554311d8def95c6c72",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/logo/logo_linux.png",
+      "sha256": "ef2c8e75e6a12f2fd2d399ee59b1fc0293a23f3ac3cf9388e3503e2435f3d125",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/logo/logo_rounded.png",
+      "sha256": "60ca92b2322a5485203a9b2dfff1f0980f87c073e95bd4379e0e77aaf6ab3acc",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/logo/logo_windows.ico",
+      "sha256": "55705d76d75351d0039cc4e5f428e0b142a4c9e2485b48ae5d16c7f091b6e90d",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "windows/runner/resources/app_icon.ico",
+      "sha256": "a0b849b2e518f8d72b546115fcfbf608944e19cf9c140b554311d8def95c6c72",
+      "reason": "original Kazumi logo"
+    },
+    {
+      "path": "assets/images/noface.jpeg",
+      "sha256": "824be2d5b27ae6c2b8c2b4b63545a187e38ce6cab33bdb56d65b2d04485c03bb",
+      "reason": "source-unclear static avatar"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-hdpi/ic_launcher_foreground.png",
+      "sha256": "4b8e1407a137591d73cd20f55857b816d50e043d6f07f43a6ba56add5c5c98ce",
+      "reason": "original Android launcher foreground"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-mdpi/ic_launcher_foreground.png",
+      "sha256": "0d657d800ebb1e61dd81ae059311b350d1c0873cf1448d4126d9efc56d84cedc",
+      "reason": "original Android launcher foreground"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-xhdpi/ic_launcher_foreground.png",
+      "sha256": "e78d8ddcbcecc488e7f562af986a25e77d34585f88dfa436d3c6846e3ff47c9e",
+      "reason": "original Android launcher foreground"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-xxhdpi/ic_launcher_foreground.png",
+      "sha256": "cdd37a7325b7fe39203a89a706dd94905f9d4c5d51864fa29ae5b2a30d13a64f",
+      "reason": "original Android launcher foreground"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-xxxhdpi/ic_launcher_foreground.png",
+      "sha256": "7d8ba4058aa03f6d674fbb525c382dfa13d00e4bd6fb1ca9251bb1127c34da13",
+      "reason": "original Android launcher foreground"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher.png",
+      "sha256": "a0b849b2e518f8d72b546115fcfbf608944e19cf9c140b554311d8def95c6c72",
+      "reason": "original Android launcher icon"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher.png",
+      "sha256": "5fc7da240d44302ae453b3b84d0b3cb8a54250e48a0764b76e5788b955244437",
+      "reason": "original Android launcher icon"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher.png",
+      "sha256": "c7e0564728093ba6b399f000f942fcafecbf42e914e49915d742de96a2191a9c",
+      "reason": "original Android launcher icon"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png",
+      "sha256": "e2dbf0cd15d3ac7ae9f07c6aae3e1344f020674c72684a90f634048a26790a20",
+      "reason": "original Android launcher icon"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+      "sha256": "dfd8b45805ada07d5a1421e9eb47f6d29d863737b5ae12cbf47f9af9bd0d57b8",
+      "reason": "original Android launcher icon"
+    }
+  ]
+}

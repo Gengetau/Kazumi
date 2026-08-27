@@ -19,6 +19,8 @@ import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/webview_feature_service.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/navigation.dart';
+import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/utils/build_info.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,6 +68,10 @@ void main() async {
         }));
     return;
   }
+  final appTitle = kSyncPlayTestBuild ? kSyncPlayTestProductName : 'Kazumi';
+  if (kSyncPlayTestBuild) {
+    KazumiLogger().i('Build identity:\n$syncPlayBuildIdentity');
+  }
   bool showWindowButton =
       await GStorage.getSetting(SettingsKeys.showWindowButton);
   if (isDesktop()) {
@@ -80,7 +86,7 @@ void main() async {
           ? TitleBarStyle.hidden
           : TitleBarStyle.normal,
       windowButtonVisibility: showWindowButton,
-      title: 'Kazumi',
+      title: appTitle,
     );
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       // window_manager controls desktop visibility to avoid startup flicker.

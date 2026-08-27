@@ -13,6 +13,7 @@ import 'package:kazumi/bean/settings/theme_provider.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/utils/device.dart';
+import 'package:kazumi/utils/build_info.dart';
 import 'package:kazumi/utils/theme.dart';
 
 class AppWidget extends StatefulWidget {
@@ -284,6 +285,7 @@ class _AppWidgetState extends State<AppWidget>
   }
 
   Future<void> _handleTray() async {
+    final appTitle = kSyncPlayTestBuild ? kSyncPlayTestProductName : 'Kazumi';
     if (Platform.isWindows) {
       await trayManager.setIcon('assets/images/logo/logo_lanczos.ico');
     } else if (Platform.environment.containsKey('FLATPAK_ID') ||
@@ -294,13 +296,13 @@ class _AppWidgetState extends State<AppWidget>
     }
 
     if (!Platform.isLinux) {
-      await trayManager.setToolTip('Kazumi');
+      await trayManager.setToolTip(appTitle);
     }
 
     Menu trayMenu = Menu(items: [
       MenuItem(key: 'show_window', label: '显示窗口'),
       MenuItem.separator(),
-      MenuItem(key: 'exit', label: '退出 Kazumi')
+      MenuItem(key: 'exit', label: '退出 $appTitle')
     ]);
     await trayManager.setContextMenu(trayMenu);
   }
@@ -333,7 +335,7 @@ class _AppWidgetState extends State<AppWidget>
             : dynamicDarkTheme;
 
         return MaterialApp.router(
-          title: "Kazumi",
+          title: kSyncPlayTestBuild ? kSyncPlayTestProductName : 'Kazumi',
           localizationsDelegates: GlobalMaterialLocalizations.delegates,
           supportedLocales: const [
             Locale.fromSubtags(

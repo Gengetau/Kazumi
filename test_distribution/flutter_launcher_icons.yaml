@@ -1,0 +1,11 @@
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: test_distribution/branding/icon_1024.png
+  image_path_android: test_distribution/branding/icon_1024.png
+  adaptive_icon_background: "#18243A"
+  adaptive_icon_foreground: test_distribution/branding/icon_foreground_1024.png
+  windows:
+    generate: true
+    image_path: test_distribution/branding/icon_1024.png
+    icon_size: 256

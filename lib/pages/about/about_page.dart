@@ -12,6 +12,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:kazumi/utils/device.dart';
+import 'package:kazumi/utils/build_info.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({
@@ -302,30 +303,50 @@ class _AboutPageState extends State<AboutPage> {
                 ),
               ],
             ),
-            SettingsSection(
-              title: Text('应用更新'),
-              tiles: [
-                SettingsTile.switchTile(
-                  leading: Icons.update_rounded,
-                  onToggle: (value) async {
-                    autoUpdate = value ?? !autoUpdate;
-                    await GStorage.putSetting(
-                        SettingsKeys.autoUpdate, autoUpdate);
-                    setState(() {});
-                  },
-                  title: Text('启动时检查应用更新'),
-                  initialValue: autoUpdate,
+            if (kSyncPlayTestBuild)
+              SettingsSection(
+                title: Text('测试构建信息'),
+                tiles: [
+                  SettingsTile(
+                    leading: Icons.science_rounded,
+                    title: Text(kSyncPlayTestProductName),
+                    description: Text(
+                      '功能源 SHA: $kSyncPlayFeatureSha\n'
+                      '测试分支 SHA: $kSyncPlayTestSha\n'
+                      'Build ID: $kSyncPlayBuildId',
+                    ),
+                  ),
+                ],
+                bottomInfo: const Text(
+                  '本构建仅用于本轮功能测试，请勿将其误认为 Kazumi 官方版本。\n'
+                  '测试版已禁用官方应用自动更新和 APK 安装。',
                 ),
-                SettingsTile(
-                  leading: Icons.system_update_rounded,
-                  onPressed: (_) {
-                    myController.checkUpdate();
-                  },
-                  title: Text('检查应用更新'),
-                  value: Text('当前版本 ${ApiEndpoints.version}'),
-                ),
-              ],
-            ),
+              ),
+            if (!kSyncPlayTestBuild)
+              SettingsSection(
+                title: Text('应用更新'),
+                tiles: [
+                  SettingsTile.switchTile(
+                    leading: Icons.update_rounded,
+                    onToggle: (value) async {
+                      autoUpdate = value ?? !autoUpdate;
+                      await GStorage.putSetting(
+                          SettingsKeys.autoUpdate, autoUpdate);
+                      setState(() {});
+                    },
+                    title: Text('启动时检查应用更新'),
+                    initialValue: autoUpdate,
+                  ),
+                  SettingsTile(
+                    leading: Icons.system_update_rounded,
+                    onPressed: (_) {
+                      myController.checkUpdate();
+                    },
+                    title: Text('检查应用更新'),
+                    value: Text('当前版本 ${ApiEndpoints.version}'),
+                  ),
+                ],
+              ),
             SettingsSection(
               title: Text('规则更新'),
               tiles: [

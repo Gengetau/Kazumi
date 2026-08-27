@@ -46,6 +46,8 @@ app.*.map.json
 
 # Added after flutter 3.29
 /android/app/.cxx/
+/android/key.properties
+*.jks
 android/build/reports/problems/
 
 # CocoaPods - iOS/macOS dependencies

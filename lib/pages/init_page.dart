@@ -18,6 +18,7 @@ import 'package:kazumi/services/platform/windows_shortcut.dart';
 import 'package:kazumi/services/platform/platform_environment_service.dart';
 import 'package:kazumi/services/update/startup_update_check.dart';
 import 'package:kazumi/navigation.dart';
+import 'package:kazumi/utils/build_info.dart';
 
 class InitPage extends StatefulWidget {
   const InitPage({
@@ -83,13 +84,15 @@ class _InitPageState extends State<InitPage> {
     if (!mounted) {
       return;
     }
-    final updateController = myController;
-    unawaited(runStartupUpdateCheck(
-      isEnabled: () => GStorage.getSetting(SettingsKeys.autoUpdate),
-      checkForUpdate: () async {
-        await updateController.checkUpdate(type: 'auto');
-      },
-    ));
+    if (!kSyncPlayTestBuild) {
+      final updateController = myController;
+      unawaited(runStartupUpdateCheck(
+        isEnabled: () => GStorage.getSetting(SettingsKeys.autoUpdate),
+        checkForUpdate: () async {
+          await updateController.checkUpdate(type: 'auto');
+        },
+      ));
+    }
     _startDefaultPage();
   }
 

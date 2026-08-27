@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Kazumi SyncPlay Test procedural icon</title>
+  <desc>Geometric play triangle, chat bubble, and test marker.</desc>
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="#18243A"/>
+  <rect x="52" y="52" width="920" height="920" rx="202" fill="none" stroke="#2E4565" stroke-width="20"/>
+  <path d="M300 320 L300 704 L650 512 Z" fill="#8FE4FF"/>
+  <path d="M492 610 H790 C823 610 850 637 850 670 V730 C850 763 823 790 790 790 H740 L700 850 L682 790 H552 C519 790 492 763 492 730 Z" fill="#29496A" stroke="#8FE4FF" stroke-width="24" stroke-linejoin="round"/>
+  <circle cx="580" cy="700" r="18" fill="#8FE4FF"/>
+  <circle cx="650" cy="700" r="18" fill="#8FE4FF"/>
+  <circle cx="720" cy="700" r="18" fill="#8FE4FF"/>
+  <path d="M780 145 L842 181 L842 253 L780 289 L718 253 L718 181 Z" fill="#FFCB69" stroke="#18243A" stroke-width="14" stroke-linejoin="round"/>
+  <path d="M756 217 L774 235 L807 197" fill="none" stroke="#18243A" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

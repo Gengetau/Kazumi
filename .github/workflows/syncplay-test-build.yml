@@ -1,0 +1,339 @@
+name: SyncPlay temporary test build
+
+on:
+  push:
+    branches:
+      - test/syncplay-chat-room-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DANDANAPI_APPID: ${{ secrets.DANDANAPI_APPID }}
+  DANDANAPI_KEY: ${{ secrets.DANDANAPI_KEY }}
+  KAZUMI_APPID: ${{ secrets.KAZUMI_APPID }}
+  KAZUMI_KEY: ${{ secrets.KAZUMI_KEY }}
+
+jobs:
+  verify:
+    name: Verify feature base and test tree
+    runs-on: ubuntu-latest
+    outputs:
+      feature_sha: ${{ steps.revisions.outputs.feature_sha }}
+      feature_short_sha: ${{ steps.revisions.outputs.feature_short_sha }}
+      test_sha: ${{ steps.revisions.outputs.test_sha }}
+      merge_base: ${{ steps.revisions.outputs.merge_base }}
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify feature branch ancestry
+        id: revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            '+refs/heads/feat/syncplay-chat-room:refs/remotes/origin/feat/syncplay-chat-room'
+          FEATURE_SHA="$(git rev-parse refs/remotes/origin/feat/syncplay-chat-room)"
+          TEST_SHA="$(git rev-parse HEAD)"
+          MERGE_BASE="$(git merge-base "$FEATURE_SHA" "$TEST_SHA")"
+
+          echo "FEATURE_SHA=$FEATURE_SHA"
+          echo "TEST_SHA=$TEST_SHA"
+          echo "MERGE_BASE=$MERGE_BASE"
+          if ! git merge-base --is-ancestor "$FEATURE_SHA" "$TEST_SHA"; then
+            echo 'ERROR: test branch does not contain the current feature branch HEAD.' >&2
+            echo 'Rebase test/syncplay-chat-room-build onto feat/syncplay-chat-room and push it first.' >&2
+            exit 1
+          fi
+          if [[ "$MERGE_BASE" != "$FEATURE_SHA" ]]; then
+            echo 'ERROR: test branch merge-base is not the current feature HEAD; rebase is required.' >&2
+            exit 1
+          fi
+
+          {
+            echo "feature_sha=$FEATURE_SHA"
+            echo "feature_short_sha=${FEATURE_SHA:0:7}"
+            echo "test_sha=$TEST_SHA"
+            echo "merge_base=$MERGE_BASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.16.0
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Recreate procedural branding
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check 'Pillow==12.3.0'
+          python3 tool/generate_syncplay_test_branding.py
+
+      - name: Generate configured launcher icons
+        run: dart run flutter_launcher_icons -f test_distribution/flutter_launcher_icons.yaml
+
+      - name: Verify source assets
+        run: python3 tool/verify_syncplay_test_assets.py
+
+      - name: Run Flutter tests
+        run: flutter test
+
+      - name: Analyze Flutter project
+        run: flutter analyze --no-fatal-infos --fatal-warnings
+
+  android:
+    name: Android release test package
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      SYNCPLAY_FEATURE_SHA: ${{ needs.verify.outputs.feature_sha }}
+      SYNCPLAY_TEST_SHA: ${{ needs.verify.outputs.test_sha }}
+      SYNCPLAY_TEST_KEYSTORE_B64: ${{ secrets.SYNCPLAY_TEST_KEYSTORE_B64 }}
+      SYNCPLAY_TEST_STORE_PASSWORD: ${{ secrets.SYNCPLAY_TEST_STORE_PASSWORD }}
+      SYNCPLAY_TEST_KEY_ALIAS: ${{ secrets.SYNCPLAY_TEST_KEY_ALIAS }}
+      SYNCPLAY_TEST_KEY_PASSWORD: ${{ secrets.SYNCPLAY_TEST_KEY_PASSWORD }}
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Android build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.16.0
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Generate configured launcher icons
+        run: dart run flutter_launcher_icons -f test_distribution/flutter_launcher_icons.yaml
+
+      - name: Prepare optional stable test signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$SYNCPLAY_TEST_KEYSTORE_B64" && \
+                -n "$SYNCPLAY_TEST_STORE_PASSWORD" && \
+                -n "$SYNCPLAY_TEST_KEY_ALIAS" && \
+                -n "$SYNCPLAY_TEST_KEY_PASSWORD" ]]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/kazumi-syncplay-test.jks"
+            printf '%s' "$SYNCPLAY_TEST_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+            printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$KEYSTORE_PATH" "$SYNCPLAY_TEST_STORE_PASSWORD" \
+              "$SYNCPLAY_TEST_KEY_ALIAS" "$SYNCPLAY_TEST_KEY_PASSWORD" \
+              > android/key.properties
+            echo 'SIGNING_MODE=stable-test' >> "$GITHUB_ENV"
+            echo 'UPGRADE_REQUIRES_UNINSTALL=false' >> "$GITHUB_ENV"
+            echo 'Stable SyncPlay test signing enabled.'
+          else
+            echo '::warning::Stable SyncPlay signing secrets are incomplete or absent; falling back to ephemeral debug signing.'
+            echo 'WARNING: SYNCPLAY_TEST_* signing secrets are not complete; this APK uses ephemeral debug signing.'
+            echo 'SIGNING_MODE=ephemeral-debug' >> "$GITHUB_ENV"
+            echo 'UPGRADE_REQUIRES_UNINSTALL=true' >> "$GITHUB_ENV"
+          fi
+
+      - name: Build universal release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk --release \
+            --dart-define=DANDANAPI_APPID="$DANDANAPI_APPID" \
+            --dart-define=DANDANAPI_KEY="$DANDANAPI_KEY" \
+            --dart-define=KAZUMI_APPID="$KAZUMI_APPID" \
+            --dart-define=KAZUMI_KEY="$KAZUMI_KEY" \
+            --dart-define=SYNCPLAY_TEST_BUILD=true \
+            --dart-define=SYNCPLAY_FEATURE_SHA="$SYNCPLAY_FEATURE_SHA" \
+            --dart-define=SYNCPLAY_TEST_SHA="$SYNCPLAY_TEST_SHA" \
+            --dart-define=SYNCPLAY_BUILD_ID="$GITHUB_RUN_NUMBER"
+
+      - name: Validate APK package and assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_SOURCE='build/app/outputs/flutter-apk/app-release.apk'
+          test -f "$APK_SOURCE"
+          AAPT="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          test -n "$AAPT"
+          "$AAPT" dump badging "$APK_SOURCE" | tee apk-badging.txt
+          grep -Fq "package: name='io.github.gengetau.kazumi.syncplaytest'" apk-badging.txt
+          python3 tool/verify_syncplay_test_assets.py --archive "$APK_SOURCE"
+
+      - name: Create Android traceable packet
+        shell: bash
+        run: |
+          set -euo pipefail
+          FEATURE_SHORT_SHA="${SYNCPLAY_FEATURE_SHA:0:7}"
+          APK_NAME="Kazumi-SyncPlay-Test-Android-${FEATURE_SHORT_SHA}-r${GITHUB_RUN_NUMBER}.apk"
+          PACKET_NAME="Kazumi-SyncPlay-Test-Android-${FEATURE_SHORT_SHA}-r${GITHUB_RUN_NUMBER}"
+          TEST_SHA_ACTUAL="$(git rev-parse HEAD)"
+          test "$TEST_SHA_ACTUAL" = "$SYNCPLAY_TEST_SHA"
+          BUILD_TIME_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sed \
+            -e "s|@FEATURE_SOURCE_SHA@|$SYNCPLAY_FEATURE_SHA|g" \
+            -e "s|@TEST_SOURCE_SHA@|$SYNCPLAY_TEST_SHA|g" \
+            -e "s|@BUILD_TIME_UTC@|$BUILD_TIME_UTC|g" \
+            -e "s|@BUILD_ID@|$GITHUB_RUN_NUMBER|g" \
+            -e "s|@SIGNING_MODE@|$SIGNING_MODE|g" \
+            -e "s|@UPGRADE_REQUIRES_UNINSTALL@|$UPGRADE_REQUIRES_UNINSTALL|g" \
+            test_distribution/SOURCE_INFO.template.txt > SOURCE_INFO.txt
+
+          PACKET_DIR="$RUNNER_TEMP/$PACKET_NAME"
+          mkdir -p "$PACKET_DIR"
+          cp build/app/outputs/flutter-apk/app-release.apk "$PACKET_DIR/$APK_NAME"
+          cp SOURCE_INFO.txt "$PACKET_DIR/SOURCE_INFO.txt"
+          cp test_distribution/BUG_REPORT_TEMPLATE.md "$PACKET_DIR/BUG_REPORT_TEMPLATE.md"
+          (
+            cd "$PACKET_DIR"
+            sha256sum "$APK_NAME" SOURCE_INFO.txt BUG_REPORT_TEMPLATE.md > SHA256SUMS.txt
+            zip -q -9 "$GITHUB_WORKSPACE/$PACKET_NAME.zip" "$APK_NAME" SOURCE_INFO.txt SHA256SUMS.txt BUG_REPORT_TEMPLATE.md
+          )
+          sha256sum "$PACKET_NAME.zip" > "$PACKET_NAME.zip.sha256"
+
+      - name: Upload Android test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kazumi-SyncPlay-Test-Android-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}
+          path: |
+            Kazumi-SyncPlay-Test-Android-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}.zip
+            Kazumi-SyncPlay-Test-Android-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}.zip.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  windows:
+    name: Windows portable test package
+    needs: verify
+    runs-on: windows-latest
+    env:
+      SYNCPLAY_FEATURE_SHA: ${{ needs.verify.outputs.feature_sha }}
+      SYNCPLAY_TEST_SHA: ${{ needs.verify.outputs.test_sha }}
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install yq
+        shell: pwsh
+        run: choco install yq -y --no-progress
+
+      - name: Enable Git long paths
+        shell: pwsh
+        run: git config --system core.longpaths true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2.16.0
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Get Flutter dependencies
+        shell: pwsh
+        run: flutter pub get
+
+      - name: Generate configured launcher icons
+        shell: pwsh
+        run: dart run flutter_launcher_icons -f test_distribution/flutter_launcher_icons.yaml
+
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          flutter build windows --release `
+            "--dart-define=DANDANAPI_APPID=$env:DANDANAPI_APPID" `
+            "--dart-define=DANDANAPI_KEY=$env:DANDANAPI_KEY" `
+            "--dart-define=KAZUMI_APPID=$env:KAZUMI_APPID" `
+            "--dart-define=KAZUMI_KEY=$env:KAZUMI_KEY" `
+            '--dart-define=SYNCPLAY_TEST_BUILD=true' `
+            "--dart-define=SYNCPLAY_FEATURE_SHA=$env:SYNCPLAY_FEATURE_SHA" `
+            "--dart-define=SYNCPLAY_TEST_SHA=$env:SYNCPLAY_TEST_SHA" `
+            "--dart-define=SYNCPLAY_BUILD_ID=$env:GITHUB_RUN_NUMBER"
+
+      - name: Validate Windows bundle identity and assets
+        shell: pwsh
+        run: |
+          $releaseDir = 'build/windows/x64/runner/Release'
+          $exe = Join-Path $releaseDir 'kazumi_syncplay_test.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Expected Windows executable was not found: $exe"
+          }
+          python tool/verify_syncplay_test_assets.py --root $releaseDir
+
+      - name: Create Windows traceable packet
+        shell: pwsh
+        run: |
+          $featureShortSha = $env:SYNCPLAY_FEATURE_SHA.Substring(0, 7)
+          $packetName = "Kazumi-SyncPlay-Test-Windows-$featureShortSha-r$env:GITHUB_RUN_NUMBER"
+          $releaseDir = 'build/windows/x64/runner/Release'
+          $testShaActual = (git rev-parse HEAD).Trim()
+          if ($testShaActual -ne $env:SYNCPLAY_TEST_SHA) {
+            throw "Checked out test SHA $testShaActual does not match verify output $env:SYNCPLAY_TEST_SHA"
+          }
+
+          $template = Get-Content -Raw test_distribution/SOURCE_INFO.template.txt
+          $template = $template.Replace('@FEATURE_SOURCE_SHA@', $env:SYNCPLAY_FEATURE_SHA)
+          $template = $template.Replace('@TEST_SOURCE_SHA@', $env:SYNCPLAY_TEST_SHA)
+          $template = $template.Replace('@BUILD_TIME_UTC@', (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
+          $template = $template.Replace('@BUILD_ID@', $env:GITHUB_RUN_NUMBER)
+          $template = $template.Replace('@SIGNING_MODE@', 'not-applicable')
+          $template = $template.Replace('@UPGRADE_REQUIRES_UNINSTALL@', 'false')
+          Set-Content -Path SOURCE_INFO.txt -Value $template -NoNewline -Encoding utf8
+
+          $packetDir = Join-Path $env:RUNNER_TEMP $packetName
+          New-Item -ItemType Directory -Path $packetDir -Force | Out-Null
+          Copy-Item -Path $releaseDir -Destination $packetDir -Recurse -Force
+          Copy-Item -Path SOURCE_INFO.txt -Destination (Join-Path $packetDir 'SOURCE_INFO.txt') -Force
+          Copy-Item -Path test_distribution/BUG_REPORT_TEMPLATE.md -Destination (Join-Path $packetDir 'BUG_REPORT_TEMPLATE.md') -Force
+
+          $releaseFiles = Get-ChildItem -Path (Join-Path $packetDir 'Release') -File -Recurse | Sort-Object FullName
+          $sumLines = foreach ($file in $releaseFiles) {
+            $relative = [IO.Path]::GetRelativePath((Join-Path $packetDir 'Release'), $file.FullName).Replace('\', '/')
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  Release/$relative"
+          }
+          foreach ($fileName in @('SOURCE_INFO.txt', 'BUG_REPORT_TEMPLATE.md')) {
+            $file = Join-Path $packetDir $fileName
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
+            $sumLines += "$hash  $fileName"
+          }
+          $sumLines | Set-Content -Path (Join-Path $packetDir 'SHA256SUMS.txt') -Encoding utf8
+
+          $zipPath = "$packetName.zip"
+          Compress-Archive -Path (Join-Path $packetDir '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
+          (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant() + "  $zipPath" |
+            Set-Content -Path "$zipPath.sha256" -Encoding utf8
+
+      - name: Upload Windows test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kazumi-SyncPlay-Test-Windows-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}
+          path: |
+            Kazumi-SyncPlay-Test-Windows-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}.zip
+            Kazumi-SyncPlay-Test-Windows-${{ needs.verify.outputs.feature_short_sha }}-r${{ github.run_number }}.zip.sha256
+          retention-days: 14
+          if-no-files-found: error

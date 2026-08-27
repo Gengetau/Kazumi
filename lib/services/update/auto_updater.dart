@@ -14,6 +14,7 @@ import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/utils/date_time.dart';
 import 'package:kazumi/utils/crypto.dart';
 import 'package:kazumi/utils/version.dart';
+import 'package:kazumi/utils/build_info.dart';
 
 /// 安装类型枚举
 enum InstallationType {
@@ -155,6 +156,13 @@ class AutoUpdater {
 
   /// 检查是否有新版本可用
   Future<UpdateInfo?> checkForUpdates() async {
+    if (kSyncPlayTestBuild) {
+      KazumiLogger().i(
+        'Update: release lookup skipped for the unofficial SyncPlay test build',
+      );
+      return null;
+    }
+
     try {
       final data = await _latestRelease();
 
@@ -200,6 +208,8 @@ class AutoUpdater {
 
   /// 自动检查更新（仅在启用自动更新时）
   Future<void> autoCheckForUpdates() async {
+    if (kSyncPlayTestBuild) return;
+
     final autoUpdate = GStorage.getSetting(SettingsKeys.autoUpdate);
     if (!autoUpdate) return;
 
@@ -216,6 +226,8 @@ class AutoUpdater {
 
   /// 手动检查更新
   Future<void> manualCheckForUpdates() async {
+    if (kSyncPlayTestBuild) return;
+
     try {
       final updateInfo = await checkForUpdates();
       if (updateInfo != null) {
@@ -397,6 +409,8 @@ class AutoUpdater {
   /// 根据选择的类型下载更新
   Future<void> _downloadUpdateWithType(
       UpdateInfo updateInfo, InstallationType selectedType) async {
+    if (kSyncPlayTestBuild) return;
+
     try {
       // iOS 和 Linux 直接跳转到 Release 页面
       if (selectedType == InstallationType.ios ||
@@ -443,6 +457,8 @@ class AutoUpdater {
   /// 下载更新
   Future<void> _downloadUpdate(
       UpdateInfo updateInfo, String expectedHash) async {
+    if (kSyncPlayTestBuild) return;
+
     if (updateInfo.downloadUrl.isEmpty) {
       KazumiDialog.showToast(message: '没有找到合适的下载链接');
       return;
@@ -707,6 +723,8 @@ class AutoUpdater {
   /// 安装更新
   void _installUpdate(
       String filePath, InstallationType installationType) async {
+    if (kSyncPlayTestBuild) return;
+
     try {
       // 显示准备退出的提示
       KazumiDialog.showToast(message: '准备安装更新，应用即将退出...');
