@@ -201,6 +201,7 @@ abstract class _PlayerSyncPlayController with Store {
             localBangumiId: binding.bangumiId,
           ),
         );
+        return;
       } else if (media.episode != binding.currentEpisode) {
         await binding.changeEpisodeFromRoom(media.episode);
         if (!_isCurrentPlayback(attachment)) {
@@ -220,7 +221,8 @@ abstract class _PlayerSyncPlayController with Store {
     SyncPlayPlaybackAttachment attachment,
     SyncPlayRoomPlaybackSnapshot snapshot,
   ) async {
-    if (!_isCurrentPlayback(attachment)) {
+    if (!_isCurrentPlayback(attachment) ||
+        !_canApplyPlaybackSnapshot(attachment)) {
       return;
     }
     final binding = attachment.binding;
@@ -234,11 +236,13 @@ abstract class _PlayerSyncPlayController with Store {
             (binding.playerPosition - compensated).inMilliseconds.abs() >
                 1000)) {
       await binding.seekFromRoom(compensated);
-      if (!_isCurrentPlayback(attachment)) {
+      if (!_isCurrentPlayback(attachment) ||
+          !_canApplyPlaybackSnapshot(attachment)) {
         return;
       }
     }
-    if (!_isCurrentPlayback(attachment)) {
+    if (!_isCurrentPlayback(attachment) ||
+        !_canApplyPlaybackSnapshot(attachment)) {
       return;
     }
     if (snapshot.paused) {
@@ -248,6 +252,13 @@ abstract class _PlayerSyncPlayController with Store {
     } else if (!binding.playing) {
       await binding.playFromRoom();
     }
+  }
+
+  bool _canApplyPlaybackSnapshot(SyncPlayPlaybackAttachment attachment) {
+    final media = currentMedia;
+    return media == null ||
+        (media.bangumiId == attachment.binding.bangumiId &&
+            media.episode == attachment.binding.currentEpisode);
   }
 
   void _emitMediaEvent(SyncPlayRoomMediaEvent event) {
@@ -673,7 +684,8 @@ abstract class _PlayerSyncPlayController with Store {
           }
           KazumiLogger().i(
               'SyncPlay: position changed by ${message['setBy']}: [${DateTime.now().millisecondsSinceEpoch / 1000.0}] calculatedPosition ${message['calculatedPositon']} position: ${message['position']} doSeek: ${message['doSeek']} paused: ${message['paused']} clientRtt: ${message['clientRtt']} serverRtt: ${message['serverRtt']} fd: ${message['fd']}');
-          if (attachment != null) {
+          if (attachment != null &&
+              _canApplyPlaybackSnapshot(attachment)) {
             unawaited(_applyRemotePlaybackSnapshot(attachment, snapshot));
           }
         },
@@ -806,6 +818,10 @@ abstract class _PlayerSyncPlayController with Store {
     SyncPlayPlaybackAttachment attachment,
     SyncPlayRoomPlaybackSnapshot snapshot,
   ) async {
+    if (!_isCurrentPlayback(attachment) ||
+        !_canApplyPlaybackSnapshot(attachment)) {
+      return;
+    }
     try {
       await _applyPlaybackSnapshot(attachment, snapshot);
     } catch (error, stackTrace) {
@@ -880,8 +896,17 @@ abstract class _PlayerSyncPlayController with Store {
       // The route may have detached or been replaced while episode loading
       // was in flight.  Do not let a completed stale callback continue into
       // any follow-up room state application.
-      if (!_isCurrentPlayback(attachment)) {
+      final latestMedia = currentMedia;
+      if (!_isCurrentPlayback(attachment) ||
+          latestMedia == null ||
+          latestMedia.generation != media.generation ||
+          latestMedia.bangumiId != media.bangumiId ||
+          latestMedia.episode != media.episode) {
         return;
+      }
+      final snapshot = _playbackSnapshot;
+      if (snapshot != null) {
+        await _applyPlaybackSnapshot(attachment, snapshot);
       }
     } catch (error, stackTrace) {
       if (_isCurrentPlayback(attachment)) {

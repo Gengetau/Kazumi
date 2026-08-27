@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 import 'package:kazumi/services/player/syncplay_media_codec.dart';
@@ -149,6 +151,61 @@ void main() {
 
     expect(binding.episodeChanges, isEmpty);
     expect(controller.currentMedia!.episode, 9);
+    await _disposeController(controller, client);
+  });
+
+  test('does not apply room playback state from a different bangumi',
+      () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 9,
+      playing: true,
+    );
+    controller.attachPlayback(binding);
+    client.emitFileChanged(name: '67890[3]', setBy: 'friend');
+    await _settle();
+
+    client.emitPosition(position: 30, paused: true, doSeek: true);
+    await _settle();
+
+    expect(controller.currentMedia!.bangumiId, 67890);
+    expect(controller.playbackSnapshot, isNotNull);
+    expect(binding.seekCalls, isEmpty);
+    expect(binding.pauseCalls, 0);
+    expect(binding.playCalls, 0);
+    await _disposeController(controller, client);
+  });
+
+  test('applies a cached snapshot after same-bangumi episode change',
+      () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 8,
+      playing: true,
+    )..episodeChangeGate = Completer<void>();
+    controller.attachPlayback(binding);
+
+    client.emitFileChanged(name: '12345[9]', setBy: 'friend');
+    await _settle();
+    expect(binding.episodeChanges, [9]);
+
+    client.emitPosition(position: 25, paused: true, doSeek: true);
+    await _settle();
+    expect(binding.seekCalls, isEmpty);
+    expect(binding.pauseCalls, 0);
+
+    binding.episodeChangeGate!.complete();
+    await _settle();
+
+    expect(binding.currentEpisode, 9);
+    expect(binding.seekCalls, [const Duration(seconds: 25)]);
+    expect(binding.pauseCalls, 1);
     await _disposeController(controller, client);
   });
 
