@@ -107,7 +107,7 @@ final class SyncPlayInviteCodec {
             ?.trim();
     final room = capture(r'(?:房间号?|room)\s*[：:]\s*([A-Za-z0-9._-]+)');
     final server = capture(
-      r'(?:服务器地址?|server|endpoint)\s*[：:]\s*([^\s，,]+)',
+      r'(?:服务器(?:地址)?|server|endpoint)\s*[：:]\s*([^\s，,]+)',
     );
     if (room == null ||
         server == null ||

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
