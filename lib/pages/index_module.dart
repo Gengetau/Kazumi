@@ -12,6 +12,7 @@ import 'package:kazumi/pages/popular/popular_module.dart';
 import 'package:kazumi/pages/route_error_page.dart';
 import 'package:kazumi/pages/search/search_module.dart';
 import 'package:kazumi/pages/settings/settings_module.dart';
+import 'package:kazumi/pages/syncplay_room/syncplay_room_module.dart';
 import 'package:kazumi/pages/timeline/timeline_controller.dart';
 import 'package:kazumi/pages/timeline/timeline_module.dart';
 import 'package:kazumi/pages/video/video_module.dart';
@@ -113,6 +114,7 @@ final indexModule = createModule(
       )
       ..module(infoModule)
       ..module(settingsModule)
-      ..module(searchModule);
+      ..module(searchModule)
+      ..module(syncPlayRoomModule);
   },
 );

@@ -229,17 +229,17 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
   @override
   Widget build(BuildContext context) {
     Widget observedHeader(BuildContext context) => Observer(
-          builder: (context) {
-            final controller = widget.controller;
-            return _buildHeader(
-              context,
-              room: controller.syncplayRoom,
-              rtt: controller.syncplayClientRtt,
-              state: controller.connectionState,
-              chatDanmakuEnabled: _chatDanmakuEnabled,
-            );
-          },
+      builder: (context) {
+        final controller = widget.controller;
+        return _buildHeader(
+          context,
+          room: controller.syncplayRoom,
+          rtt: controller.syncplayClientRtt,
+          state: controller.connectionState,
+          chatDanmakuEnabled: _chatDanmakuEnabled,
         );
+      },
+    );
 
     final chatDanmaku = widget.chatDanmakuController;
     if (chatDanmaku == null) return observedHeader(context);
@@ -353,8 +353,8 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
           final message = Text(
             noRoom ? '加入房间后开始聊天' : '暂无聊天消息',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           );
           final onJoin = widget.onJoinRoom;
           if (!noRoom || onJoin == null) {
@@ -384,15 +384,16 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
               itemCount: messages.length,
               itemBuilder: (context, index) {
                 final message = messages[index];
-                final grouped = index > 0 &&
-                    messages[index - 1].canGroupWith(message);
+                final grouped =
+                    index > 0 && messages[index - 1].canGroupWith(message);
                 return SyncPlayChatTile(
                   controller: controller,
                   message: message,
                   maxBubbleWidth: widget.maxBubbleWidth,
                   grouped: grouped,
                   showSender: !grouped,
-                  showTime: index == messages.length - 1 ||
+                  showTime:
+                      index == messages.length - 1 ||
                       !message.canGroupWith(messages[index + 1]),
                   onReply: widget.onReply,
                 );
@@ -465,8 +466,7 @@ class SyncPlayChatTile extends StatelessWidget {
   }
 
   Color _avatarColor(String username) {
-    return _avatarColors[
-        syncPlayUsernameHash(username) % _avatarColors.length];
+    return _avatarColors[syncPlayUsernameHash(username) % _avatarColors.length];
   }
 
   Future<void> _showActions(BuildContext context) async {
@@ -497,9 +497,9 @@ class SyncPlayChatTile extends StatelessWidget {
                     muted ? Icons.visibility_rounded : Icons.visibility_off,
                   ),
                   title: Text(muted ? '取消屏蔽用户' : '屏蔽用户'),
-                  onTap: () => Navigator.of(context).pop(
-                    muted ? _ChatTileAction.unmute : _ChatTileAction.mute,
-                  ),
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pop(muted ? _ChatTileAction.unmute : _ChatTileAction.mute),
                 ),
             ],
           ),
@@ -521,10 +521,7 @@ class SyncPlayChatTile extends StatelessWidget {
     }
   }
 
-  Widget _buildSelectionMenu(
-    BuildContext context,
-    EditableTextState state,
-  ) {
+  Widget _buildSelectionMenu(BuildContext context, EditableTextState state) {
     final items = <ContextMenuButtonItem>[
       ContextMenuButtonItem(
         label: '复制文本',
@@ -559,14 +556,12 @@ class SyncPlayChatTile extends StatelessWidget {
     );
   }
 
-  Widget _buildMentionText(
-    BuildContext context,
-    Color textColor,
-  ) {
+  Widget _buildMentionText(BuildContext context, Color textColor) {
     final username = controller.confirmedUsername;
     final mentionPattern = isSyncPlayUsernameValid(username)
         ? RegExp(
-            r'(^|[\s\(\[\{（【「“‘])@' + RegExp.escape(username) +
+            r'(^|[\s\(\[\{（【「“‘])@' +
+                RegExp.escape(username) +
                 r'(?=$|[\s,.!?！？:：;；\)\]\}）】」”’])',
             caseSensitive: false,
           )
@@ -576,9 +571,8 @@ class SyncPlayChatTile extends StatelessWidget {
         message.message,
         contextMenuBuilder: (context, state) =>
             _buildSelectionMenu(context, state),
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: textColor,
-            ),
+        style: Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(color: textColor),
       );
     }
     final spans = <TextSpan>[];
@@ -608,9 +602,8 @@ class SyncPlayChatTile extends StatelessWidget {
     }
     return SelectableText.rich(
       TextSpan(
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: textColor,
-            ),
+        style: Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(color: textColor),
         children: spans,
       ),
       contextMenuBuilder: (context, state) =>
@@ -732,8 +725,9 @@ class SyncPlayChatTile extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.fromLTRB(12, grouped ? 1 : 4, 12, 4),
               child: Align(
-                alignment:
-                    remote ? Alignment.centerLeft : Alignment.centerRight,
+                alignment: remote
+                    ? Alignment.centerLeft
+                    : Alignment.centerRight,
                 child: tile,
               ),
             ),
@@ -838,8 +832,9 @@ class SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
       minLines: 1,
       maxLines: 3,
       maxLength: controller.chatMessageLengthLimit,
-      textInputAction:
-          isDesktop() ? TextInputAction.newline : TextInputAction.send,
+      textInputAction: isDesktop()
+          ? TextInputAction.newline
+          : TextInputAction.send,
       onSubmitted: (_) {
         if (!isDesktop()) {
           unawaited(_send());
@@ -932,9 +927,14 @@ class SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
   }
 }
 
-/// The chat surface for the currently active SyncPlay room.
-class SyncPlayChatPanel extends StatefulWidget {
-  const SyncPlayChatPanel({
+/// The reusable chat surface for the currently active SyncPlay room.
+///
+/// The room page and the player page intentionally share this widget and the
+/// same app-scoped session.  It owns only view state (scroll position and the
+/// composer draft); messages, unread counts and message actions stay in the
+/// session controller.
+class SyncPlayChatView extends StatefulWidget {
+  const SyncPlayChatView({
     super.key,
     required this.controller,
     required this.onSend,
@@ -960,10 +960,10 @@ class SyncPlayChatPanel extends StatefulWidget {
   final VoidCallback? onJoinRoom;
 
   @override
-  State<SyncPlayChatPanel> createState() => _SyncPlayChatPanelState();
+  State<SyncPlayChatView> createState() => _SyncPlayChatViewState();
 }
 
-class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
+class _SyncPlayChatViewState extends State<SyncPlayChatView> {
   final GlobalKey<SyncPlayChatComposerState> _composerKey =
       GlobalKey<SyncPlayChatComposerState>();
 
@@ -1010,4 +1010,22 @@ class _SyncPlayChatPanelState extends State<SyncPlayChatPanel> {
       },
     );
   }
+}
+
+/// Compatibility name retained for the player page while chat is promoted to
+/// a room-level reusable view.
+class SyncPlayChatPanel extends SyncPlayChatView {
+  const SyncPlayChatPanel({
+    super.key,
+    required super.controller,
+    required super.onSend,
+    super.inviteText,
+    super.inviteTextBuilder,
+    super.onCopyInvite,
+    super.compact,
+    super.chatDanmakuController,
+    super.onReconnect,
+    super.onClearHistory,
+    super.onJoinRoom,
+  });
 }
