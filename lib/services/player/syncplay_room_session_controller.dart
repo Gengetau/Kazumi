@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 
 export 'package:kazumi/pages/player/controller/player_syncplay_controller.dart'
@@ -10,7 +11,9 @@ export 'package:kazumi/pages/player/controller/player_syncplay_controller.dart'
 /// generated MobX store and legacy imports stay source-compatible. This
 /// concrete type is the app-scope registration point and does not add a
 /// second room manager or any additional state.
-class SyncPlayRoomSessionController extends PlayerSyncPlayController {
+class SyncPlayRoomSessionController
+    extends PlayerSyncPlayController
+    implements Disposable {
   SyncPlayRoomSessionController({
     SyncplayClientFactory? clientFactory,
     @visibleForTesting String Function()? endpointProvider,

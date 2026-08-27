@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
 import 'syncplay_test_doubles.dart';
 
@@ -39,6 +41,13 @@ Future<void> _disposeController(
 }
 
 void main() {
+  test('the concrete room session is a Modular Disposable', () async {
+    final controller = SyncPlayRoomSessionController();
+
+    expect(controller, isA<Disposable>());
+    await controller.dispose();
+  });
+
   test('connects a room without a playback binding', () async {
     final client = FakeSyncplayClient();
     final controller = _controllerFor([client]);
