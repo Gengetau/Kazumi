@@ -10,6 +10,7 @@ import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_invite.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/syncplay_media_codec.dart';
 import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
@@ -25,6 +26,7 @@ typedef SyncplayClientFactory = SyncplayClient Function({
 });
 
 const Duration _roomMediaSelectionTimeout = Duration(seconds: 10);
+const Duration _managedRoomOperationTimeout = Duration(seconds: 10);
 
 final class _PendingRoomMediaSelection {
   _PendingRoomMediaSelection({
@@ -48,8 +50,7 @@ abstract class _PlayerSyncPlayController with Store {
     SyncplayClientFactory? clientFactory,
     @visibleForTesting String Function()? endpointProvider,
     @visibleForTesting Duration? mediaSelectionTimeout,
-  })
-      : _clientFactory = clientFactory ??
+  })  : _clientFactory = clientFactory ??
             (({required String host, required int port}) =>
                 SyncplayClient(host: host, port: port)),
         _endpointProvider = endpointProvider,
@@ -70,6 +71,7 @@ abstract class _PlayerSyncPlayController with Store {
   @observable
   SyncplayClient? syncplayController;
   final AsyncSessionOwner _connectionSessions = AsyncSessionOwner();
+  AsyncSession? _activeConnectionSession;
   @observable
   String syncplayRoom = '';
   @observable
@@ -78,6 +80,45 @@ abstract class _PlayerSyncPlayController with Store {
   @observable
   SyncPlayConnectionState connectionState =
       SyncPlayConnectionState.disconnected;
+
+  final Observable<SyncPlayRoomControlMode> _roomControlMode =
+      Observable(SyncPlayRoomControlMode.free);
+  final Observable<SyncPlayOperatorAuthState> _operatorAuthState =
+      Observable(SyncPlayOperatorAuthState.none);
+  final Observable<SyncplayServerFeatures> _serverFeatures =
+      Observable(const SyncplayServerFeatures());
+  final Observable<String?> _operatorPassword = Observable(null);
+  final Observable<String?> _managedRoomBaseName = Observable(null);
+
+  final ObservableMap<String, SyncplayRoomUser> roomUsers =
+      ObservableMap<String, SyncplayRoomUser>();
+
+  SyncPlayRoomControlMode get roomControlMode => _roomControlMode.value;
+
+  SyncPlayOperatorAuthState get operatorAuthState => _operatorAuthState.value;
+
+  SyncplayServerFeatures get serverFeatures => _serverFeatures.value;
+
+  String? get operatorPassword => _operatorPassword.value;
+
+  String? get managedRoomBaseName => _managedRoomBaseName.value;
+
+  bool get serverSupportsManagedRooms => serverFeatures.managedRooms;
+
+  bool get isManagedRoom =>
+      roomControlMode == SyncPlayRoomControlMode.managed ||
+      isSyncPlayManagedRoomName(syncplayRoom);
+
+  bool get isRoomOperator {
+    final username = confirmedUsername;
+    if (username.isEmpty) {
+      return false;
+    }
+    return roomUsers[username]?.isController == true;
+  }
+
+  bool get hasActiveOperator =>
+      roomUsers.values.any((user) => user.isController);
 
   bool get hasSession => syncplayController != null;
 
@@ -146,8 +187,7 @@ abstract class _PlayerSyncPlayController with Store {
   /// Local video-source resolution/loading state. This is never encoded into
   /// SyncPlay protocol messages or broadcast as room media.
   @observable
-  SyncPlayLocalMediaStatus localMediaStatus =
-      SyncPlayLocalMediaStatus.idle;
+  SyncPlayLocalMediaStatus localMediaStatus = SyncPlayLocalMediaStatus.idle;
 
   /// A local resolution error, if [localMediaStatus] is [failed].
   @observable
@@ -160,13 +200,9 @@ abstract class _PlayerSyncPlayController with Store {
 
   int get mediaGeneration => _mediaGeneration;
 
-  /// Playback controls are currently available to every connected room
-  /// member. Host/permission semantics are intentionally deferred.
-  bool get canControlPlayback => true;
+  bool get canControlPlayback => !isManagedRoom || isRoomOperator;
 
-  /// Media selection is currently available to every connected room member.
-  /// The picker and playback route will consume this seam later.
-  bool get canSelectRoomMedia => true;
+  bool get canSelectRoomMedia => !isManagedRoom || isRoomOperator;
 
   final ObservableList<SyncPlayChatMessage> chatMessages =
       ObservableList<SyncPlayChatMessage>();
@@ -197,8 +233,10 @@ abstract class _PlayerSyncPlayController with Store {
   String _activeChatRoom = '';
   String _requestedChatRoom = '';
   String _requestedUsername = '';
+  String? _requestedOperatorPassword;
   bool _connectionLossHandled = false;
   Future<void>? _retryFuture;
+  Future<bool>? _operatorAuthenticationFuture;
   bool _chatEntryPromptShown = false;
   bool? _lastConfirmedProtocolPaused;
   String? _lastPlaybackNoticeFingerprint;
@@ -326,8 +364,7 @@ abstract class _PlayerSyncPlayController with Store {
 
   Stream<SyncPlayChatMessage> get chatStream => _chatStreamController.stream;
 
-  final StreamController<SyncPlayRoomMediaEvent>
-      _mediaEventStreamController =
+  final StreamController<SyncPlayRoomMediaEvent> _mediaEventStreamController =
       StreamController<SyncPlayRoomMediaEvent>.broadcast();
 
   Stream<SyncPlayRoomMediaEvent> get mediaEvents =>
@@ -398,8 +435,8 @@ abstract class _PlayerSyncPlayController with Store {
     final elapsed = snapshot.paused
         ? Duration.zero
         : DateTime.now().difference(snapshot.receivedAt);
-    final compensated = snapshot.position +
-        (elapsed.isNegative ? Duration.zero : elapsed);
+    final compensated =
+        snapshot.position + (elapsed.isNegative ? Duration.zero : elapsed);
     if (binding.duration > Duration.zero &&
         (snapshot.doSeek ||
             (binding.playerPosition - compensated).inMilliseconds.abs() >
@@ -509,6 +546,16 @@ abstract class _PlayerSyncPlayController with Store {
     _mediaGeneration = 0;
     setLocalMediaStatus(SyncPlayLocalMediaStatus.idle);
     resetPlaybackNoticeBaseline();
+  }
+
+  void _clearManagedRoomState() {
+    roomUsers.clear();
+    _roomControlMode.value = SyncPlayRoomControlMode.free;
+    _operatorAuthState.value = SyncPlayOperatorAuthState.none;
+    _serverFeatures.value = const SyncplayServerFeatures();
+    _operatorPassword.value = null;
+    _managedRoomBaseName.value = null;
+    _requestedOperatorPassword = null;
   }
 
   void appendUserMessage({
@@ -765,6 +812,42 @@ abstract class _PlayerSyncPlayController with Store {
     String room,
     String username, {
     bool preserveChatHistory = false,
+  }) {
+    return _connectRoom(
+      room,
+      username,
+      preserveChatHistory: preserveChatHistory,
+      requestedControlMode: isSyncPlayManagedRoomName(room)
+          ? SyncPlayRoomControlMode.managed
+          : SyncPlayRoomControlMode.free,
+      operatorPassword: preserveChatHistory ? _requestedOperatorPassword : null,
+    );
+  }
+
+  Future<bool> createManagedRoom(
+    String roomBaseName,
+    String username,
+  ) async {
+    final password = generateSyncPlayOperatorPassword();
+    await _connectRoom(
+      roomBaseName,
+      username,
+      requestedControlMode: SyncPlayRoomControlMode.managed,
+      operatorPassword: password,
+      createManagedRoom: true,
+    );
+    return connectionState == SyncPlayConnectionState.connected &&
+        isManagedRoom &&
+        isRoomOperator;
+  }
+
+  Future<void> _connectRoom(
+    String room,
+    String username, {
+    bool preserveChatHistory = false,
+    required SyncPlayRoomControlMode requestedControlMode,
+    String? operatorPassword,
+    bool createManagedRoom = false,
   }) async {
     if (_connectionSessions.isClosed) {
       return;
@@ -772,7 +855,9 @@ abstract class _PlayerSyncPlayController with Store {
     _cancelMediaSelection();
     _requestedChatRoom = room;
     _requestedUsername = username;
+    _requestedOperatorPassword = operatorPassword;
     final session = _connectionSessions.begin();
+    _activeConnectionSession = session;
     final reconnecting = preserveChatHistory ||
         connectionState == SyncPlayConnectionState.reconnecting;
     final previousClient = syncplayController;
@@ -783,6 +868,16 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayController = null;
     syncplayRoom = '';
     syncplayClientRtt = 0;
+    roomUsers.clear();
+    _serverFeatures.value = const SyncplayServerFeatures();
+    _roomControlMode.value = requestedControlMode;
+    _operatorAuthState.value =
+        requestedControlMode == SyncPlayRoomControlMode.managed
+            ? SyncPlayOperatorAuthState.authenticating
+            : SyncPlayOperatorAuthState.none;
+    _operatorPassword.value = operatorPassword;
+    _managedRoomBaseName.value =
+        requestedControlMode == SyncPlayRoomControlMode.managed ? room : null;
     beginChatSession(room, preserveHistory: preserveChatHistory);
     resetPlaybackNoticeBaseline();
     await previousClient?.disconnect();
@@ -842,10 +937,19 @@ abstract class _PlayerSyncPlayController with Store {
           }
           if (message['type'] == 'left') {
             final sender = normalizeSyncPlayUsername(message['username']);
+            roomUsers.remove(sender);
             appendSystemMessage('$sender 离开了房间');
           }
           if (message['type'] == 'joined') {
             final sender = normalizeSyncPlayUsername(message['username']);
+            roomUsers.putIfAbsent(
+              sender,
+              () => SyncplayRoomUser(
+                username: sender,
+                room: syncplayRoom.isNotEmpty ? syncplayRoom : room,
+                isController: false,
+              ),
+            );
             appendSystemMessage('$sender 加入了房间');
           }
         },
@@ -914,6 +1018,22 @@ abstract class _PlayerSyncPlayController with Store {
           }
         },
       );
+      client.onControllerAuthResult.listen(
+        (result) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
+          _applyControllerAuthResult(result);
+        },
+      );
+      client.onUserListChanged.listen(
+        (snapshot) {
+          if (!_isCurrentConnection(session, client)) {
+            return;
+          }
+          _applyUserListSnapshot(snapshot);
+        },
+      );
       final hello = await client.joinRoom(room, username);
       if (!_isCurrentConnection(session, client)) {
         await client.disconnect();
@@ -922,10 +1042,120 @@ abstract class _PlayerSyncPlayController with Store {
       if (hello.room.trim().isEmpty) {
         throw SyncplayProtocolException('SyncPlay: Hello 未确认房间');
       }
-      // Room and invite data become formal only after Hello. The returned
-      // username is also the identity used to classify local chat echoes.
-      beginChatSession(hello.room, preserveHistory: preserveChatHistory);
-      syncplayRoom = hello.room;
+      _serverFeatures.value = hello.features;
+      var authoritativeRoom = hello.room.trim();
+      var effectiveControlMode = isSyncPlayManagedRoomName(authoritativeRoom)
+          ? SyncPlayRoomControlMode.managed
+          : SyncPlayRoomControlMode.free;
+      var activeOperatorPassword = operatorPassword;
+
+      if (createManagedRoom) {
+        if (!hello.features.managedRooms) {
+          throw SyncplayProtocolException('当前服务器不支持房主控制房间');
+        }
+        final password = normalizeSyncPlayOperatorPassword(
+          operatorPassword ?? '',
+        );
+        if (!isSyncPlayOperatorPasswordValid(password)) {
+          throw SyncplayProtocolException('主持密码格式无效');
+        }
+        final createdFuture = client.onControlledRoomCreated.first.timeout(
+          _managedRoomOperationTimeout,
+          onTimeout: () => throw SyncplayConnectionException(
+            'SyncPlay: 创建房主控制房间超时',
+          ),
+        );
+        await client.requestControlledRoom(authoritativeRoom, password);
+        final created = await createdFuture;
+        if (!_isCurrentConnection(session, client)) {
+          await client.disconnect();
+          return;
+        }
+        authoritativeRoom = created.roomName.trim();
+        if (!isSyncPlayManagedRoomName(authoritativeRoom)) {
+          throw SyncplayProtocolException('服务器返回了无效的房主控制房间');
+        }
+        final roomChangedFuture = client.onRoomChanged
+            .firstWhere((roomName) => roomName == authoritativeRoom)
+            .timeout(
+              _managedRoomOperationTimeout,
+              onTimeout: () => throw SyncplayConnectionException(
+                'SyncPlay: 切换房主控制房间超时',
+              ),
+            );
+        await client.changeRoom(authoritativeRoom);
+        await roomChangedFuture;
+        final authenticated = await _authenticateClientAsOperator(
+          session: session,
+          client: client,
+          room: authoritativeRoom,
+          password: password,
+        );
+        if (!authenticated) {
+          throw SyncplayProtocolException('主持身份认证失败');
+        }
+        activeOperatorPassword = password;
+        effectiveControlMode = SyncPlayRoomControlMode.managed;
+        _requestedChatRoom = authoritativeRoom;
+        _requestedOperatorPassword = password;
+      } else if (effectiveControlMode == SyncPlayRoomControlMode.managed) {
+        if (!hello.features.managedRooms) {
+          throw SyncplayProtocolException('当前服务器不支持房主控制房间');
+        }
+        final password = operatorPassword == null
+            ? null
+            : normalizeSyncPlayOperatorPassword(operatorPassword);
+        if (password != null && password.isNotEmpty) {
+          final authenticated = await _authenticateClientAsOperator(
+            session: session,
+            client: client,
+            room: authoritativeRoom,
+            password: password,
+          );
+          if (!authenticated && preserveChatHistory) {
+            appendSystemMessage('主持身份恢复失败');
+          }
+        }
+        activeOperatorPassword = password;
+        _requestedChatRoom = authoritativeRoom;
+        _requestedOperatorPassword = password;
+      }
+
+      if (effectiveControlMode == SyncPlayRoomControlMode.managed) {
+        await _requestManagedRoomUserList(
+          session: session,
+          client: client,
+          requireLocalOperator: createManagedRoom,
+        );
+      }
+      if (!_isCurrentConnection(session, client)) {
+        await client.disconnect();
+        return;
+      }
+
+      // Room and invite data become formal only after the complete managed
+      // room transaction. The returned username is also the identity used to
+      // classify local chat echoes.
+      beginChatSession(authoritativeRoom, preserveHistory: preserveChatHistory);
+      syncplayRoom = authoritativeRoom;
+      _roomControlMode.value = effectiveControlMode;
+      _operatorPassword.value =
+          effectiveControlMode == SyncPlayRoomControlMode.managed
+              ? activeOperatorPassword
+              : null;
+      _managedRoomBaseName.value =
+          effectiveControlMode == SyncPlayRoomControlMode.managed
+              ? syncPlayManagedRoomBaseName(authoritativeRoom)
+              : null;
+      if (effectiveControlMode == SyncPlayRoomControlMode.free) {
+        _operatorAuthState.value = SyncPlayOperatorAuthState.none;
+        roomUsers.clear();
+      } else if (isRoomOperator) {
+        _operatorAuthState.value = SyncPlayOperatorAuthState.operator;
+      } else if (_operatorAuthState.value ==
+          SyncPlayOperatorAuthState.authenticating) {
+        _operatorAuthState.value = SyncPlayOperatorAuthState.none;
+      }
       connectionState = SyncPlayConnectionState.connected;
       final binding = _playbackBinding;
       if (currentMedia == null && binding != null) {
@@ -950,9 +1180,197 @@ abstract class _PlayerSyncPlayController with Store {
       }
       await _disconnect(clearChatSession: false, client: client);
       _cancelMediaSelection();
+      if (createManagedRoom) {
+        roomUsers.clear();
+        _roomControlMode.value = SyncPlayRoomControlMode.free;
+        _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
+        _operatorPassword.value = null;
+        _managedRoomBaseName.value = null;
+        _requestedOperatorPassword = null;
+      }
       connectionState = SyncPlayConnectionState.failed;
       final message = e is SyncplayException ? e.message : e.toString();
       _emitNotice(SyncPlayRoomConnectionFailed('连接失败 $message'));
+    }
+  }
+
+  Future<bool> authenticateAsOperator(String rawPassword) {
+    final active = _operatorAuthenticationFuture;
+    if (active != null) {
+      return active;
+    }
+    final future = _authenticateAsOperatorOnce(rawPassword);
+    _operatorAuthenticationFuture = future;
+    return future.whenComplete(() {
+      if (identical(_operatorAuthenticationFuture, future)) {
+        _operatorAuthenticationFuture = null;
+      }
+    });
+  }
+
+  Future<bool> _authenticateAsOperatorOnce(String rawPassword) async {
+    final client = syncplayController;
+    final room = syncplayRoom;
+    final password = normalizeSyncPlayOperatorPassword(rawPassword);
+    if (connectionState != SyncPlayConnectionState.connected ||
+        client == null ||
+        room.isEmpty ||
+        !isManagedRoom ||
+        !serverSupportsManagedRooms ||
+        !isSyncPlayOperatorPasswordValid(password)) {
+      return false;
+    }
+    final session = _activeConnectionSession;
+    if (session == null || !session.isActive) {
+      return false;
+    }
+    _operatorAuthState.value = SyncPlayOperatorAuthState.authenticating;
+    try {
+      final authenticated = await _authenticateClientAsOperator(
+        session: session,
+        client: client,
+        room: room,
+        password: password,
+      );
+      if (!authenticated || !_isCurrentConnection(session, client)) {
+        _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
+        return false;
+      }
+      _operatorPassword.value = password;
+      _requestedOperatorPassword = password;
+      await _requestManagedRoomUserList(
+        session: session,
+        client: client,
+        requireLocalOperator: true,
+      );
+      if (!isRoomOperator) {
+        _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
+        return false;
+      }
+      _operatorAuthState.value = SyncPlayOperatorAuthState.operator;
+      appendSystemMessage(
+        '${confirmedUsername.isEmpty ? '当前用户' : confirmedUsername} 已成为主持人',
+      );
+      return true;
+    } on SyncplayException catch (error) {
+      KazumiLogger().w(
+        'SyncPlay: operator authentication failed',
+        error: error,
+      );
+      _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
+      return false;
+    } on TimeoutException catch (error) {
+      KazumiLogger().w(
+        'SyncPlay: operator authentication timed out',
+        error: error,
+      );
+      _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
+      return false;
+    }
+  }
+
+  Future<bool> _authenticateClientAsOperator({
+    required AsyncSession session,
+    required SyncplayClient client,
+    required String room,
+    required String password,
+  }) async {
+    final normalizedPassword = normalizeSyncPlayOperatorPassword(password);
+    if (!isSyncPlayOperatorPasswordValid(normalizedPassword)) {
+      return false;
+    }
+    _operatorAuthState.value = SyncPlayOperatorAuthState.authenticating;
+    final username = client.username ?? confirmedUsername;
+    final resultFuture = client.onControllerAuthResult
+        .firstWhere(
+          (result) =>
+              result.room == room &&
+              (username.isEmpty || result.username == username),
+        )
+        .timeout(
+          _managedRoomOperationTimeout,
+          onTimeout: () => throw SyncplayConnectionException(
+            'SyncPlay: 主持身份认证超时',
+          ),
+        );
+    await client.requestControlledRoom(room, normalizedPassword);
+    final result = await resultFuture;
+    if (!_isCurrentConnection(session, client)) {
+      return false;
+    }
+    _applyControllerAuthResult(result);
+    return result.success;
+  }
+
+  Future<void> _requestManagedRoomUserList({
+    required AsyncSession session,
+    required SyncplayClient client,
+    required bool requireLocalOperator,
+  }) async {
+    final snapshotFuture = client.onUserListChanged.first.timeout(
+      _managedRoomOperationTimeout,
+      onTimeout: () => throw SyncplayConnectionException(
+        'SyncPlay: 获取房间成员列表超时',
+      ),
+    );
+    await client.requestUserList();
+    final snapshot = await snapshotFuture;
+    if (!_isCurrentConnection(session, client)) {
+      return;
+    }
+    _applyUserListSnapshot(snapshot);
+    if (requireLocalOperator && !isRoomOperator) {
+      throw SyncplayProtocolException('服务器未确认当前用户的主持身份');
+    }
+  }
+
+  void _applyControllerAuthResult(SyncplayControllerAuthResult result) {
+    final room = syncplayRoom.isNotEmpty
+        ? syncplayRoom
+        : syncplayController?.currentRoom ?? _requestedChatRoom;
+    if (result.room != room || !isSyncPlayUsernameValid(result.username)) {
+      return;
+    }
+    final username = normalizeSyncPlayUsername(result.username);
+    final existing = roomUsers[username];
+    if (result.success) {
+      roomUsers[username] = (existing ??
+              SyncplayRoomUser(
+                username: username,
+                room: result.room,
+                isController: false,
+              ))
+          .copyWith(room: result.room, isController: true);
+    }
+    if (username == confirmedUsername) {
+      _operatorAuthState.value = result.success
+          ? SyncPlayOperatorAuthState.operator
+          : SyncPlayOperatorAuthState.failed;
+    }
+  }
+
+  void _applyUserListSnapshot(SyncplayUserListSnapshot snapshot) {
+    final room = syncplayRoom.isNotEmpty
+        ? syncplayRoom
+        : syncplayController?.currentRoom ?? _requestedChatRoom;
+    final filtered = snapshot.users.values.where(
+      (user) => user.room == room && isSyncPlayUsernameValid(user.username),
+    );
+    roomUsers
+      ..clear()
+      ..addEntries(
+        filtered.map(
+          (user) => MapEntry(
+            normalizeSyncPlayUsername(user.username),
+            user.copyWith(username: normalizeSyncPlayUsername(user.username)),
+          ),
+        ),
+      );
+    final username = confirmedUsername;
+    if (username.isNotEmpty && roomUsers[username]?.isController == true) {
+      _operatorAuthState.value = SyncPlayOperatorAuthState.operator;
+    } else if (_operatorAuthState.value != SyncPlayOperatorAuthState.failed) {
+      _operatorAuthState.value = SyncPlayOperatorAuthState.none;
     }
   }
 
@@ -992,6 +1410,9 @@ abstract class _PlayerSyncPlayController with Store {
     if (!session.isActive) {
       return;
     }
+    if (identical(_activeConnectionSession, session)) {
+      _activeConnectionSession = null;
+    }
     _cancelMediaSelection();
     syncplayController = null;
     syncplayRoom = '';
@@ -1009,6 +1430,7 @@ abstract class _PlayerSyncPlayController with Store {
     }
     _connectionLossHandled = true;
     _connectionSessions.cancel();
+    _activeConnectionSession = null;
     _cancelMediaSelection();
     syncplayController = null;
     syncplayRoom = '';
@@ -1060,8 +1482,7 @@ abstract class _PlayerSyncPlayController with Store {
   void _handleRemotePlaybackNotice(SyncPlayRoomPlaybackSnapshot snapshot) {
     final actor = normalizeSyncPlayUsername(snapshot.setBy, fallback: '');
     final roundedPosition = snapshot.position.inMilliseconds / 1000;
-    final fingerprint =
-        '$actor|${snapshot.paused}|${roundedPosition.round()}';
+    final fingerprint = '$actor|${snapshot.paused}|${roundedPosition.round()}';
     final receivedAt = snapshot.receivedAt;
     final previousPaused = _lastConfirmedProtocolPaused;
     final isDuplicate = _lastPlaybackNoticeFingerprint == fingerprint &&
@@ -1220,7 +1641,8 @@ abstract class _PlayerSyncPlayController with Store {
     forceSyncPlaying ??= binding.playing;
     syncplayController!.setPaused(!forceSyncPlaying);
     syncplayController!.setPosition((forceSyncPosition ??
-        (((binding.currentPosition.inMilliseconds - binding.playerPosition.inMilliseconds)
+        (((binding.currentPosition.inMilliseconds -
+                        binding.playerPosition.inMilliseconds)
                     .abs() >
                 2000)
             ? binding.currentPosition.inMilliseconds.toDouble() / 1000
@@ -1322,9 +1744,8 @@ abstract class _PlayerSyncPlayController with Store {
       if (!_isCurrentMediaSelection(selection)) {
         return await selection.completer.future;
       }
-      final message = error is SyncplayException
-          ? error.message
-          : '发送房间媒体失败：$error';
+      final message =
+          error is SyncplayException ? error.message : '发送房间媒体失败：$error';
       KazumiLogger().w(
         'SyncPlay: failed to select room media',
         error: error,
@@ -1447,6 +1868,7 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
     String? systemMessage,
   }) async {
     _connectionSessions.cancel();
+    _activeConnectionSession = null;
     final controller = client ?? syncplayController;
     if (clearChatSession ||
         client == null ||
@@ -1464,6 +1886,7 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
     if (clearChatSession) {
       this.clearChatSession();
       _clearRoomPlaybackState();
+      _clearManagedRoomState();
       _requestedChatRoom = '';
       _requestedUsername = '';
       _connectionLossHandled = true;
