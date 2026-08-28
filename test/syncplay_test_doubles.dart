@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
 import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 
@@ -89,9 +90,10 @@ class FakeSyncplayClient extends SyncplayClient {
   }
 
   @override
-  Future<void> disconnect() async {
+  Future<void> disconnect() {
     disconnectCalls++;
     connected = false;
+    return SynchronousFuture<void>(null);
   }
 
   @override

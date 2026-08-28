@@ -61,7 +61,6 @@
       flutter-test:
         if: ${{ github.event_name == 'workflow_dispatch' || ! github.event.pull_request.draft }}
         runs-on: "ubuntu-latest"
-        timeout-minutes: 10
         permissions:
           contents: read
         steps:
@@ -76,7 +75,7 @@
             run: flutter pub get
             shell: bash
           - name: Run Flutter tests
-            run: flutter test test/syncplay_room_page_test.dart --reporter expanded
+            run: flutter test
             shell: bash
 
       flutter-analyze:

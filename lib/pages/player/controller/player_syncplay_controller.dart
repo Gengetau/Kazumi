@@ -57,9 +57,6 @@ abstract class _PlayerSyncPlayController with Store {
             mediaSelectionTimeout ?? _roomMediaSelectionTimeout;
 
   final SyncplayClientFactory _clientFactory;
-  final Map<SyncplayClient, List<StreamSubscription<dynamic>>>
-      _clientSubscriptions =
-          <SyncplayClient, List<StreamSubscription<dynamic>>>{};
 
   /// Supplies the configured endpoint in production. Tests may inject a
   /// deterministic endpoint while using a fake client, without touching
@@ -788,7 +785,6 @@ abstract class _PlayerSyncPlayController with Store {
     syncplayClientRtt = 0;
     beginChatSession(room, preserveHistory: preserveChatHistory);
     resetPlaybackNoticeBaseline();
-    await _cancelClientSubscriptions(previousClient);
     await previousClient?.disconnect();
     if (session.isStale) {
       return;
@@ -817,9 +813,7 @@ abstract class _PlayerSyncPlayController with Store {
         return;
       }
       KazumiLogger().i('SyncPlay: connected to ${parsed.host}:${parsed.port}');
-      final subscriptions = <StreamSubscription<dynamic>>[];
-      _clientSubscriptions[client] = subscriptions;
-      subscriptions.add(client.onGeneralMessage.listen(
+      client.onGeneralMessage.listen(
         null,
         onError: (error) {
           if (!_isCurrentConnection(session, client)) {
@@ -832,8 +826,8 @@ abstract class _PlayerSyncPlayController with Store {
             unawaited(_handleConnectionLoss(session, client, message));
           }
         },
-      ));
-      subscriptions.add(client.onRoomMessage.listen(
+      );
+      client.onRoomMessage.listen(
         (message) {
           if (!_isCurrentConnection(session, client)) {
             return;
@@ -855,8 +849,8 @@ abstract class _PlayerSyncPlayController with Store {
             appendSystemMessage('$sender 加入了房间');
           }
         },
-      ));
-      subscriptions.add(client.onFileChangedMessage.listen(
+      );
+      client.onFileChangedMessage.listen(
         (message) {
           if (!_isCurrentConnection(session, client)) {
             return;
@@ -865,8 +859,8 @@ abstract class _PlayerSyncPlayController with Store {
               'SyncPlay: file changed by ${message['setBy']}: ${message['name']}');
           _handleRemoteMediaChanged(message);
         },
-      ));
-      subscriptions.add(client.onChatMessage.listen(
+      );
+      client.onChatMessage.listen(
         (message) {
           if (!_isCurrentConnection(session, client)) {
             return;
@@ -893,8 +887,8 @@ abstract class _PlayerSyncPlayController with Store {
               error is SyncplayException ? error.message : error.toString();
           KazumiLogger().e('SyncPlay: error $message', error: error);
         },
-      ));
-      subscriptions.add(client.onPositionChangedMessage.listen(
+      );
+      client.onPositionChangedMessage.listen(
         (message) {
           if (!_isCurrentConnection(session, client)) {
             return;
@@ -915,15 +909,13 @@ abstract class _PlayerSyncPlayController with Store {
           }
           KazumiLogger().i(
               'SyncPlay: position changed by ${message['setBy']}: [${DateTime.now().millisecondsSinceEpoch / 1000.0}] calculatedPosition ${message['calculatedPositon']} position: ${message['position']} doSeek: ${message['doSeek']} paused: ${message['paused']} clientRtt: ${message['clientRtt']} serverRtt: ${message['serverRtt']} fd: ${message['fd']}');
-          if (attachment != null &&
-              _canApplyPlaybackSnapshot(attachment)) {
+          if (attachment != null && _canApplyPlaybackSnapshot(attachment)) {
             unawaited(_applyRemotePlaybackSnapshot(attachment, snapshot));
           }
         },
-      ));
+      );
       final hello = await client.joinRoom(room, username);
       if (!_isCurrentConnection(session, client)) {
-        await _cancelClientSubscriptions(client);
         await client.disconnect();
         return;
       }
@@ -953,7 +945,6 @@ abstract class _PlayerSyncPlayController with Store {
     } catch (e) {
       KazumiLogger().e('SyncPlay: error', error: e);
       if (!_isCurrentConnection(session, client)) {
-        await _cancelClientSubscriptions(client);
         await client.disconnect();
         return;
       }
@@ -1444,19 +1435,6 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
     }
   }
 
-  Future<void> _cancelClientSubscriptions(SyncplayClient? client) async {
-    if (client == null) {
-      return;
-    }
-    final subscriptions = _clientSubscriptions.remove(client);
-    if (subscriptions == null || subscriptions.isEmpty) {
-      return;
-    }
-    await Future.wait<void>(
-      subscriptions.map((subscription) => subscription.cancel()),
-    );
-  }
-
   @action
   Future<void> exitRoom() async {
     await _disconnect(clearChatSession: true);
@@ -1492,7 +1470,6 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
     } else if (systemMessage != null) {
       appendSystemMessage(systemMessage);
     }
-    await _cancelClientSubscriptions(controller);
     await controller?.disconnect();
   }
 

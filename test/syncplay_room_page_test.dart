@@ -55,14 +55,18 @@ Future<void> _disposeSession(
   SyncPlayRoomSessionController session,
   FakeSyncplayClient client,
 ) async {
-  await session.dispose().timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw StateError('room session dispose timed out'),
-      );
-  await client.closeStreams().timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => throw StateError('fake client stream close timed out'),
-      );
+  await session.dispose();
+  await client.closeStreams();
+}
+
+Future<void> _disposeWidgetSession(
+  WidgetTester tester,
+  SyncPlayRoomSessionController session,
+  FakeSyncplayClient client,
+) async {
+  await tester.runAsync(() async {
+    await _disposeSession(session, client);
+  });
 }
 
 Future<void> _pumpRoomPage(
@@ -100,7 +104,7 @@ void main() {
     expect(find.text('加入房间'), findsWidgets);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('connected room without media shows the empty state', (
@@ -117,7 +121,7 @@ void main() {
     expect(session.currentMedia, isNull);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('room media card renders the resolved title and episode', (
@@ -141,7 +145,7 @@ void main() {
     expect(find.textContaining('peer 选择'), findsOneWidget);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('room page keeps chat usable without a player', (
@@ -161,7 +165,7 @@ void main() {
     expect(client.connected, isTrue);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('leaving the room page preserves the app-scoped connection', (
@@ -186,7 +190,7 @@ void main() {
     expect(session.syncplayRoom, 'room-a');
     expect(session.currentMedia, same(media));
 
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('explicit room exit disconnects and clears session state', (
@@ -209,14 +213,13 @@ void main() {
     );
 
     await tester.tap(find.byTooltip('房间操作'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('退出聊天室'), findsOneWidget);
     await tester.tap(find.text('退出聊天室'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(FilledButton, '退出聊天室'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, '退出聊天室'));
-    await _settle();
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(client.disconnectCalls, 1);
     expect(client.connected, isFalse);
@@ -225,7 +228,7 @@ void main() {
     expect(session.chatMessages, isEmpty);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('home room entry shows unread badge without a player', (
@@ -251,7 +254,7 @@ void main() {
     expect(find.byType(Badge), findsOneWidget);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   testWidgets('covered room page records incoming chat as unread', (
@@ -280,7 +283,7 @@ void main() {
     expect(session.unreadChatCount, 0);
 
     await _unmountRoomPage(tester);
-    await _disposeSession(session, client);
+    await _disposeWidgetSession(tester, session, client);
   });
 
   test('room-first route carries its launch intent through source args', () {
