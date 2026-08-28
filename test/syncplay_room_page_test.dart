@@ -52,8 +52,14 @@ Future<void> _disposeSession(
   SyncPlayRoomSessionController session,
   FakeSyncplayClient client,
 ) async {
-  await session.dispose();
-  await client.closeStreams();
+  await session.dispose().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('room session dispose timed out'),
+      );
+  await client.closeStreams().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('fake client stream close timed out'),
+      );
 }
 
 Future<void> _pumpRoomPage(
