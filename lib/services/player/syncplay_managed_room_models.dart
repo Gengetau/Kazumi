@@ -14,6 +14,13 @@ enum SyncPlayOperatorAuthState {
   failed,
 }
 
+/// Whether the current player is attached to the shared room timeline.
+enum SyncPlayPlaybackParticipation {
+  detached,
+  followingRoom,
+  localOnly,
+}
+
 /// Managed-room capabilities advertised by a SyncPlay server.
 final class SyncplayServerFeatures {
   final bool managedRooms;

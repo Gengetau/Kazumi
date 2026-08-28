@@ -18,12 +18,20 @@ import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 import 'package:kazumi/services/player/syncplay_invite.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/async_session.dart';
 
-enum _SyncPlayRoomMenuAction { copyInvite, serverInfo, clearHistory, exitRoom }
+enum _SyncPlayRoomMenuAction {
+  copyInvite,
+  authenticateOperator,
+  copyOperatorPassword,
+  serverInfo,
+  clearHistory,
+  exitRoom,
+}
 
 /// Persistent room-first entry point for SyncPlay.
 ///
@@ -117,8 +125,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     }
     final sameMedia = _mediaInfoRoom == room &&
         _mediaInfoGeneration == media.generation &&
-        (_mediaInfoBangumi?.id == media.bangumiId ||
-            _mediaInfoBangumi == null);
+        (_mediaInfoBangumi?.id == media.bangumiId || _mediaInfoBangumi == null);
     if (!force &&
         sameMedia &&
         (_mediaInfoLoading ||
@@ -252,9 +259,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     );
     var username = '';
     try {
-      username = GStorage
-          .getSetting<String>(SettingsKeys.syncPlayUserName)
-          .trim();
+      username =
+          GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
     } catch (_) {}
     if (username.isEmpty) {
       username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
@@ -287,13 +293,126 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     };
   }
 
+  String _roomControlLabel() {
+    if (!roomSession.isManagedRoom) {
+      return '自由控制';
+    }
+    if (roomSession.operatorAuthState ==
+        SyncPlayOperatorAuthState.authenticating) {
+      return '房主控制 · 正在恢复主持身份';
+    }
+    final operatorCount =
+        roomSession.roomUsers.values.where((user) => user.isController).length;
+    if (operatorCount == 0) {
+      return '房主控制 · 暂无主持人';
+    }
+    if (roomSession.isRoomOperator) {
+      return operatorCount == 1 ? '房主控制 · 你是主持人' : '房主控制 · $operatorCount 位主持人';
+    }
+    return '房主控制 · $operatorCount 位主持人';
+  }
+
+  Widget _buildRoomControlCard(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final users = roomSession.roomUsers.values.toList()
+      ..sort((a, b) {
+        if (a.isController != b.isController) {
+          return a.isController ? -1 : 1;
+        }
+        return a.username.compareTo(b.username);
+      });
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  roomSession.isManagedRoom
+                      ? Icons.lock_person_rounded
+                      : Icons.groups_rounded,
+                  color: roomSession.isManagedRoom
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _roomControlLabel(),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (users.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final user in users)
+                    Tooltip(
+                      message: user.isController ? '主持人' : '成员',
+                      child: Chip(
+                        avatar: Icon(
+                          user.isController
+                              ? Icons.workspace_premium_rounded
+                              : Icons.person_outline_rounded,
+                          size: 18,
+                        ),
+                        label: Text(
+                          user.username == roomSession.confirmedUsername
+                              ? '${user.username}（你）'
+                              : user.username,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ] else if (roomSession.isManagedRoom) ...[
+              const SizedBox(height: 8),
+              Text(
+                '正在获取房间成员与主持状态',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            if (roomSession.isManagedRoom && !roomSession.isRoomOperator) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _showOperatorAuthentication,
+                  icon: const Icon(Icons.key_rounded),
+                  label: const Text('输入主持密码'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _showCreateForm() async {
     await showAdaptiveBottomSheet<void>(
       context: context,
       maxHeightFactor: 0.8,
       compactLandscapeMaxHeightFactor: 0.95,
       builder: (context) => SyncPlayCreateRoomForm(
-        onSubmit: (room, username) => roomSession.createRoom(room, username),
+        onSubmit: (room, username, mode) async {
+          if (mode == SyncPlayRoomControlMode.managed) {
+            await roomSession.createManagedRoom(room, username);
+            return;
+          }
+          await roomSession.createRoom(room, username);
+        },
       ),
     );
   }
@@ -336,6 +455,96 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         .showSnackBar(const SnackBar(content: Text('邀请信息已复制')));
   }
 
+  Future<void> _copyOperatorPassword() async {
+    final password = roomSession.operatorPassword;
+    if (password == null || password.isEmpty || !roomSession.isRoomOperator) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: password));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('主持密码已复制，请仅私下分享给可信成员')),
+    );
+  }
+
+  Future<void> _showOperatorAuthentication() async {
+    final controller = TextEditingController();
+    String? passwordError;
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('成为共同主持人'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            obscureText: true,
+            textCapitalization: TextCapitalization.characters,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9-]')),
+              LengthLimitingTextInputFormatter(10),
+            ],
+            decoration: InputDecoration(
+              labelText: '主持密码',
+              hintText: 'AB-123-456',
+              helperText: '密码由当前主持人私下提供',
+              errorText: passwordError,
+            ),
+            onChanged: (_) {
+              if (passwordError != null) {
+                setDialogState(() => passwordError = null);
+              }
+            },
+            onSubmitted: (value) {
+              final normalized = normalizeSyncPlayOperatorPassword(value);
+              if (isSyncPlayOperatorPasswordValid(normalized)) {
+                Navigator.of(context).pop(normalized);
+              } else {
+                setDialogState(() => passwordError = '请输入 AB-123-456 格式的主持密码');
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final normalized = normalizeSyncPlayOperatorPassword(
+                  controller.text,
+                );
+                if (!isSyncPlayOperatorPasswordValid(normalized)) {
+                  setDialogState(
+                    () => passwordError = '请输入 AB-123-456 格式的主持密码',
+                  );
+                  return;
+                }
+                Navigator.of(context).pop(normalized);
+              },
+              child: const Text('认证'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (password == null || !mounted) {
+      return;
+    }
+    final success = await roomSession.authenticateAsOperator(password);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(success ? '已成为共同主持人' : '主持密码无效或认证超时'),
+      ),
+    );
+  }
+
   Future<void> _showServerInfo() async {
     await showDialog<void>(
       context: context,
@@ -353,11 +562,25 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   }
 
   Future<void> _confirmExitRoom() async {
+    final operatorCount =
+        roomSession.roomUsers.values.where((user) => user.isController).length;
+    final isUniqueOperator = roomSession.isManagedRoom &&
+        roomSession.isRoomOperator &&
+        operatorCount <= 1;
+    final isOneOfMultipleOperators = roomSession.isManagedRoom &&
+        roomSession.isRoomOperator &&
+        operatorCount > 1;
     final shouldExit = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('退出聊天室？'),
-        content: const Text('退出聊天室后将停止同步并清除当前聊天记录'),
+        title: Text(isUniqueOperator ? '你是当前唯一主持人' : '退出聊天室？'),
+        content: Text(
+          isUniqueOperator
+              ? '退出后聊天室不会解散，但其他成员将无法控制共享播放，直到有人使用主持密码重新认证。'
+              : isOneOfMultipleOperators
+                  ? '退出后其他主持人仍可继续控制房间。'
+                  : '退出聊天室后将停止同步并清除当前聊天记录。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -365,7 +588,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('退出聊天室'),
+            child: Text(isUniqueOperator ? '仍然退出' : '退出聊天室'),
           ),
         ],
       ),
@@ -380,6 +603,10 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     switch (action) {
       case _SyncPlayRoomMenuAction.copyInvite:
         unawaited(_copyInvite());
+      case _SyncPlayRoomMenuAction.authenticateOperator:
+        unawaited(_showOperatorAuthentication());
+      case _SyncPlayRoomMenuAction.copyOperatorPassword:
+        unawaited(_copyOperatorPassword());
       case _SyncPlayRoomMenuAction.serverInfo:
         unawaited(_showServerInfo());
       case _SyncPlayRoomMenuAction.clearHistory:
@@ -392,6 +619,11 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   }
 
   Widget _buildMenu(String room) {
+    final showAuthenticate = roomSession.isManagedRoom &&
+        !roomSession.isRoomOperator &&
+        roomSession.connectionState == SyncPlayConnectionState.connected;
+    final showCopyPassword = roomSession.isRoomOperator &&
+        (roomSession.operatorPassword?.isNotEmpty ?? false);
     return PopupMenuButton<_SyncPlayRoomMenuAction>(
       tooltip: '房间操作',
       onSelected: _onMenuAction,
@@ -401,6 +633,16 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           enabled: room.isNotEmpty,
           child: const Text('复制邀请'),
         ),
+        if (showAuthenticate)
+          const PopupMenuItem(
+            value: _SyncPlayRoomMenuAction.authenticateOperator,
+            child: Text('成为共同主持人'),
+          ),
+        if (showCopyPassword)
+          const PopupMenuItem(
+            value: _SyncPlayRoomMenuAction.copyOperatorPassword,
+            child: Text('复制主持密码'),
+          ),
         const PopupMenuItem(
           value: _SyncPlayRoomMenuAction.serverInfo,
           child: Text('服务器信息'),
@@ -445,8 +687,11 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
               ),
               const SizedBox(height: 12),
               OutlinedButton(
-                onPressed: _openMediaPicker,
-                child: const Text('选择番剧'),
+                onPressed:
+                    roomSession.canSelectRoomMedia ? _openMediaPicker : null,
+                child: Text(
+                  roomSession.canSelectRoomMedia ? '选择番剧' : '等待主持人选择',
+                ),
               ),
             ],
           ),
@@ -516,7 +761,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _openMediaPicker,
+                    onPressed: roomSession.canSelectRoomMedia
+                        ? _openMediaPicker
+                        : null,
                     child: const Text('更换番剧'),
                   ),
                 ),
@@ -566,6 +813,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 ),
                 if (connected) ...[
                   const SizedBox(height: 12),
+                  _buildRoomControlCard(context),
+                  const SizedBox(height: 12),
                   _buildMediaCard(context, media),
                 ],
               ],
@@ -596,7 +845,12 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         final room = roomSession.syncplayRoom;
         final media = roomSession.currentMedia;
         final label = _connectionLabel(state);
-        final title = room.isEmpty ? '一起看' : '房间 $room';
+        final displayRoom = roomSession.isManagedRoom
+            ? roomSession.managedRoomBaseName ?? room
+            : room;
+        final title = room.isEmpty ? '一起看' : '房间 $displayRoom';
+        final subtitle =
+            room.isEmpty ? label : '$label · ${_roomControlLabel()}';
         return Scaffold(
           appBar: AppBar(
             title: Column(
@@ -604,7 +858,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(title),
-                Text(label, style: Theme.of(context).textTheme.labelSmall),
+                Text(subtitle, style: Theme.of(context).textTheme.labelSmall),
               ],
             ),
             actions: [_buildMenu(room)],

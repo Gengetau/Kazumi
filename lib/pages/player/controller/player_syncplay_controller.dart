@@ -89,6 +89,8 @@ abstract class _PlayerSyncPlayController with Store {
       Observable(const SyncplayServerFeatures());
   final Observable<String?> _operatorPassword = Observable(null);
   final Observable<String?> _managedRoomBaseName = Observable(null);
+  final Observable<SyncPlayPlaybackParticipation> _playbackParticipation =
+      Observable(SyncPlayPlaybackParticipation.detached);
 
   final ObservableMap<String, SyncplayRoomUser> roomUsers =
       ObservableMap<String, SyncplayRoomUser>();
@@ -102,6 +104,9 @@ abstract class _PlayerSyncPlayController with Store {
   String? get operatorPassword => _operatorPassword.value;
 
   String? get managedRoomBaseName => _managedRoomBaseName.value;
+
+  SyncPlayPlaybackParticipation get playbackParticipation =>
+      _playbackParticipation.value;
 
   bool get serverSupportsManagedRooms => serverFeatures.managedRooms;
 
@@ -119,6 +124,20 @@ abstract class _PlayerSyncPlayController with Store {
 
   bool get hasActiveOperator =>
       roomUsers.values.any((user) => user.isController);
+
+  bool get canControlLocalPlayback =>
+      !isManagedRoom ||
+      isRoomOperator ||
+      playbackParticipation != SyncPlayPlaybackParticipation.followingRoom;
+
+  bool get shouldBroadcastLocalPlayback =>
+      !isManagedRoom ||
+      (isRoomOperator &&
+          playbackParticipation == SyncPlayPlaybackParticipation.followingRoom);
+
+  bool get canChangePlaybackSpeed =>
+      !isManagedRoom ||
+      playbackParticipation == SyncPlayPlaybackParticipation.localOnly;
 
   bool get hasSession => syncplayController != null;
 
@@ -158,6 +177,7 @@ abstract class _PlayerSyncPlayController with Store {
       binding: binding,
     );
     _playbackBinding = binding;
+    _updatePlaybackParticipation(binding);
     unawaited(_restorePlaybackAttachment(attachment));
     return attachment;
   }
@@ -168,6 +188,21 @@ abstract class _PlayerSyncPlayController with Store {
       return;
     }
     _playbackBinding = null;
+    _playbackParticipation.value = SyncPlayPlaybackParticipation.detached;
+  }
+
+  void _updatePlaybackParticipation(SyncPlayPlaybackBinding binding) {
+    if (!isManagedRoom) {
+      _playbackParticipation.value =
+          SyncPlayPlaybackParticipation.followingRoom;
+      return;
+    }
+    final media = currentMedia;
+    _playbackParticipation.value = media != null &&
+            media.bangumiId == binding.bangumiId &&
+            media.episode == binding.currentEpisode
+        ? SyncPlayPlaybackParticipation.followingRoom
+        : SyncPlayPlaybackParticipation.localOnly;
   }
 
   bool _isCurrentPlayback(SyncPlayPlaybackAttachment attachment) {
@@ -237,6 +272,9 @@ abstract class _PlayerSyncPlayController with Store {
   bool _connectionLossHandled = false;
   Future<void>? _retryFuture;
   Future<bool>? _operatorAuthenticationFuture;
+  final List<Map<String, dynamic>> _pendingManagedMediaEvents =
+      <Map<String, dynamic>>[];
+  Timer? _pendingManagedMediaEventsTimer;
   bool _chatEntryPromptShown = false;
   bool? _lastConfirmedProtocolPaused;
   String? _lastPlaybackNoticeFingerprint;
@@ -386,6 +424,7 @@ abstract class _PlayerSyncPlayController with Store {
     if (media != null) {
       final mediaGeneration = media.generation;
       if (media.bangumiId != binding.bangumiId) {
+        _playbackParticipation.value = SyncPlayPlaybackParticipation.localOnly;
         _emitMediaEvent(
           SyncPlayRoomMediaMismatch(
             roomMedia: media,
@@ -395,6 +434,8 @@ abstract class _PlayerSyncPlayController with Store {
         );
         return;
       } else if (media.episode != binding.currentEpisode) {
+        _playbackParticipation.value =
+            SyncPlayPlaybackParticipation.followingRoom;
         // The room already selected this Bangumi, so use the normal player
         // episode transition before restoring its latest position/state.
         await binding.changeEpisodeFromRoom(media.episode);
@@ -407,13 +448,25 @@ abstract class _PlayerSyncPlayController with Store {
           return;
         }
       }
+      if (_isCurrentPlayback(attachment) &&
+          media.bangumiId == binding.bangumiId &&
+          media.episode == binding.currentEpisode) {
+        _playbackParticipation.value =
+            SyncPlayPlaybackParticipation.followingRoom;
+      }
     } else if (connectionState == SyncPlayConnectionState.connected &&
         syncplayRoom.isNotEmpty &&
         (syncplayController?.isConnected ?? false)) {
       // Video-first entry owns the first media publication when the room has
       // not selected one yet.  RoomPage has no playback binding, so it never
       // publishes a local URL or source choice here.
-      unawaited(_publishVideoFirstMedia(attachment, _mediaGeneration));
+      if (canSelectRoomMedia) {
+        _playbackParticipation.value =
+            SyncPlayPlaybackParticipation.followingRoom;
+        unawaited(_publishVideoFirstMedia(attachment, _mediaGeneration));
+      } else {
+        _playbackParticipation.value = SyncPlayPlaybackParticipation.localOnly;
+      }
     }
 
     final snapshot = _playbackSnapshot;
@@ -505,12 +558,16 @@ abstract class _PlayerSyncPlayController with Store {
         client.isConnected &&
         connectionState == SyncPlayConnectionState.connected &&
         syncplayRoom.isNotEmpty &&
+        canSelectRoomMedia &&
         currentMedia == null &&
         _mediaGeneration == expectedMediaGeneration &&
         _isCurrentPlayback(attachment);
   }
 
   bool _canApplyPlaybackSnapshot(SyncPlayPlaybackAttachment attachment) {
+    if (playbackParticipation == SyncPlayPlaybackParticipation.localOnly) {
+      return false;
+    }
     final media = currentMedia;
     return media == null ||
         (media.bangumiId == attachment.binding.bangumiId &&
@@ -549,6 +606,9 @@ abstract class _PlayerSyncPlayController with Store {
   }
 
   void _clearManagedRoomState() {
+    _pendingManagedMediaEventsTimer?.cancel();
+    _pendingManagedMediaEventsTimer = null;
+    _pendingManagedMediaEvents.clear();
     roomUsers.clear();
     _roomControlMode.value = SyncPlayRoomControlMode.free;
     _operatorAuthState.value = SyncPlayOperatorAuthState.none;
@@ -556,6 +616,9 @@ abstract class _PlayerSyncPlayController with Store {
     _operatorPassword.value = null;
     _managedRoomBaseName.value = null;
     _requestedOperatorPassword = null;
+    _playbackParticipation.value = _playbackBinding == null
+        ? SyncPlayPlaybackParticipation.detached
+        : SyncPlayPlaybackParticipation.followingRoom;
   }
 
   void appendUserMessage({
@@ -1347,6 +1410,7 @@ abstract class _PlayerSyncPlayController with Store {
           ? SyncPlayOperatorAuthState.operator
           : SyncPlayOperatorAuthState.failed;
     }
+    _drainPendingManagedMediaEvents();
   }
 
   void _applyUserListSnapshot(SyncplayUserListSnapshot snapshot) {
@@ -1372,6 +1436,7 @@ abstract class _PlayerSyncPlayController with Store {
     } else if (_operatorAuthState.value != SyncPlayOperatorAuthState.failed) {
       _operatorAuthState.value = SyncPlayOperatorAuthState.none;
     }
+    _drainPendingManagedMediaEvents();
   }
 
   /// Repeats the last requested room using the existing session's history.
@@ -1541,7 +1606,40 @@ abstract class _PlayerSyncPlayController with Store {
     }
   }
 
-  void _handleRemoteMediaChanged(Map<String, dynamic> message) {
+  void _queueManagedMediaEvent(Map<String, dynamic> message) {
+    if (_pendingManagedMediaEvents.length >= 8) {
+      _pendingManagedMediaEvents.removeAt(0);
+    }
+    _pendingManagedMediaEvents.add(Map<String, dynamic>.from(message));
+    _pendingManagedMediaEventsTimer?.cancel();
+    _pendingManagedMediaEventsTimer = Timer(
+      const Duration(seconds: 2),
+      () {
+        _pendingManagedMediaEvents.clear();
+        _pendingManagedMediaEventsTimer = null;
+      },
+    );
+  }
+
+  void _drainPendingManagedMediaEvents() {
+    if (_pendingManagedMediaEvents.isEmpty) {
+      return;
+    }
+    final pending = List<Map<String, dynamic>>.from(
+      _pendingManagedMediaEvents,
+    );
+    _pendingManagedMediaEvents.clear();
+    _pendingManagedMediaEventsTimer?.cancel();
+    _pendingManagedMediaEventsTimer = null;
+    for (final message in pending) {
+      _handleRemoteMediaChanged(message, allowRoleWait: false);
+    }
+  }
+
+  void _handleRemoteMediaChanged(
+    Map<String, dynamic> message, {
+    bool allowRoleWait = true,
+  }) {
     final rawName = message['name'];
     if (rawName is! String) {
       return;
@@ -1553,6 +1651,28 @@ abstract class _PlayerSyncPlayController with Store {
     resetPlaybackNoticeBaseline();
     final rawSetBy = message['setBy'];
     final selectedBy = rawSetBy is String ? rawSetBy : '';
+    if (isManagedRoom) {
+      final normalizedSender = normalizeSyncPlayUsername(
+        selectedBy,
+        fallback: '',
+      );
+      if (normalizedSender.isEmpty) {
+        return;
+      }
+      final sender = roomUsers[normalizedSender];
+      if (sender == null) {
+        if (allowRoleWait) {
+          _queueManagedMediaEvent(message);
+        }
+        return;
+      }
+      if (!sender.isController) {
+        KazumiLogger().w(
+          'SyncPlay: ignored managed room media from a non-operator',
+        );
+        return;
+      }
+    }
     final media = SyncPlayRoomMedia(
       bangumiId: reference.bangumiId,
       episode: reference.episode,
@@ -1576,6 +1696,7 @@ abstract class _PlayerSyncPlayController with Store {
     final binding = _playbackBinding;
     if (binding == null || binding.bangumiId != media.bangumiId) {
       if (binding != null) {
+        _playbackParticipation.value = SyncPlayPlaybackParticipation.localOnly;
         _emitMediaEvent(
           SyncPlayRoomMediaMismatch(
             roomMedia: media,
@@ -1587,8 +1708,11 @@ abstract class _PlayerSyncPlayController with Store {
       return;
     }
     if (binding.currentEpisode == media.episode) {
+      _playbackParticipation.value =
+          SyncPlayPlaybackParticipation.followingRoom;
       return;
     }
+    _playbackParticipation.value = SyncPlayPlaybackParticipation.followingRoom;
     final attachment = SyncPlayPlaybackAttachment(
       generation: _playbackBindingGeneration,
       binding: binding,
@@ -1635,7 +1759,9 @@ abstract class _PlayerSyncPlayController with Store {
 
   void setCurrentPosition({bool? forceSyncPlaying, double? forceSyncPosition}) {
     final binding = _playbackBinding;
-    if (syncplayController == null || binding == null) {
+    if (syncplayController == null ||
+        binding == null ||
+        !shouldBroadcastLocalPlayback) {
       return;
     }
     forceSyncPlaying ??= binding.playing;
@@ -1653,7 +1779,7 @@ abstract class _PlayerSyncPlayController with Store {
       {bool? forceSyncPlaying, double? forceSyncPosition}) async {
     final client = syncplayController;
     final binding = _playbackBinding;
-    if (client == null || binding == null) {
+    if (client == null || binding == null || !canSelectRoomMedia) {
       return;
     }
     final attachment = SyncPlayPlaybackAttachment(
@@ -1690,7 +1816,7 @@ abstract class _PlayerSyncPlayController with Store {
     // arguments are invalid. Otherwise the old operation could eventually
     // affect the newer request.
     _cancelMediaSelection();
-    if (bangumiId <= 0 || episode <= 0) {
+    if (bangumiId <= 0 || episode <= 0 || !canSelectRoomMedia) {
       return false;
     }
 
@@ -1813,7 +1939,7 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
 
   Future<void> requestSync({bool? doSeek}) async {
     final client = syncplayController;
-    if (client == null) {
+    if (client == null || !shouldBroadcastLocalPlayback) {
       return;
     }
     await _runBestEffortSync(

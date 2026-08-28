@@ -12,6 +12,7 @@ import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/pages/player/player_panel_hold.dart';
 import 'package:kazumi/pages/player/syncplay_chat_entry.dart';
 import 'package:kazumi/pages/player/syncplay_quick_chat_composer.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
@@ -658,6 +659,8 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Observer(builder: (context) {
+                final canControl =
+                    playerController.syncplay.canControlLocalPlayback;
                 return ProgressBar(
                   thumbRadius: 8,
                   thumbGlowRadius: 18,
@@ -674,10 +677,14 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                   progress: playerController.playback.currentPosition,
                   buffered: playerController.playback.buffer,
                   total: playerController.playback.duration,
-                  onSeek: widget.handleProgressBarSeek,
-                  onDragStart: (_) => widget.handleProgressBarDragStart(),
-                  onDragUpdate: (details) => playerController.seeking
-                      .updateInteractiveSeek(details.timeStamp),
+                  onSeek: canControl ? widget.handleProgressBarSeek : null,
+                  onDragStart: canControl
+                      ? (_) => widget.handleProgressBarDragStart()
+                      : null,
+                  onDragUpdate: canControl
+                      ? (details) => playerController.seeking
+                          .updateInteractiveSeek(details.timeStamp)
+                      : null,
                 );
               }),
             ),
@@ -686,13 +693,35 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: playerController.playback.playing ? '暂停' : '播放',
-                    onPressed: () => playerController.playOrPause(),
+                    tooltip: playerController.syncplay.canControlLocalPlayback
+                        ? (playerController.playback.playing ? '暂停' : '播放')
+                        : '当前由主持人控制播放',
+                    onPressed: playerController.syncplay.canControlLocalPlayback
+                        ? () => playerController.playOrPause()
+                        : null,
                     icon: PlayPauseIcon(
                       iconColor: Colors.white,
                       playing: playerController.playback.playing,
                     ),
                   ),
+                  if (playerController.syncplay.isManagedRoom &&
+                      playerController.syncplay.playbackParticipation ==
+                          SyncPlayPlaybackParticipation.followingRoom)
+                    Tooltip(
+                      message: playerController.syncplay.isRoomOperator
+                          ? '房主控制：你是主持人'
+                          : '房主控制：等待主持人操作',
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          playerController.syncplay.isRoomOperator
+                              ? Icons.workspace_premium_rounded
+                              : Icons.lock_person_rounded,
+                          color: Colors.white70,
+                          size: 20,
+                        ),
+                      ),
+                    ),
                   if (videoPageController.isFullscreen ||
                       isTablet() ||
                       isDesktop())
@@ -700,7 +729,10 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                       color: Colors.white,
                       icon: const Icon(Icons.skip_next_rounded),
                       tooltip: '下一集',
-                      onPressed: () => widget.handlePreNextEpisode('next'),
+                      onPressed:
+                          playerController.syncplay.canControlLocalPlayback
+                              ? () => widget.handlePreNextEpisode('next')
+                              : null,
                     ),
                   if (isDesktop())
                     Container(
@@ -837,13 +869,16 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                     builder: (BuildContext context, MenuController controller,
                         Widget? child) {
                       return TextButton(
-                        onPressed: () {
-                          if (controller.isOpen) {
-                            controller.close();
-                          } else {
-                            controller.open();
-                          }
-                        },
+                        onPressed:
+                            playerController.syncplay.canChangePlaybackSpeed
+                                ? () {
+                                    if (controller.isOpen) {
+                                      controller.close();
+                                    } else {
+                                      controller.open();
+                                    }
+                                  }
+                                : null,
                         child: Text(
                           playerController.playback.playerSpeed == 1.0
                               ? '倍速'
@@ -856,9 +891,12 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                       for (final double i
                           in defaultPlaySpeedList) ...<MenuItemButton>[
                         MenuItemButton(
-                          onPressed: () async {
-                            await widget.setPlaybackSpeed(i);
-                          },
+                          onPressed:
+                              playerController.syncplay.canChangePlaybackSpeed
+                                  ? () async {
+                                      await widget.setPlaybackSpeed(i);
+                                    }
+                                  : null,
                           child: Container(
                             height: 48,
                             constraints: BoxConstraints(minWidth: 112),

@@ -8,6 +8,7 @@ import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/pages/player/player_panel_hold.dart';
 import 'package:kazumi/pages/player/syncplay_quick_chat_composer.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
@@ -423,15 +424,36 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
             iconColor: Colors.white,
             playing: playerController.playback.playing,
           ),
-          tooltip: playerController.playback.playing ? '暂停' : '播放',
-          onPressed: () {
-            playerController.playOrPause();
-          },
+          tooltip: playerController.syncplay.canControlLocalPlayback
+              ? (playerController.playback.playing ? '暂停' : '播放')
+              : '当前由主持人控制播放',
+          onPressed: playerController.syncplay.canControlLocalPlayback
+              ? () {
+                  playerController.playOrPause();
+                }
+              : null,
         ),
+        if (playerController.syncplay.isManagedRoom &&
+            playerController.syncplay.playbackParticipation ==
+                SyncPlayPlaybackParticipation.followingRoom)
+          Tooltip(
+            message: playerController.syncplay.isRoomOperator
+                ? '房主控制：你是主持人'
+                : '房主控制：等待主持人操作',
+            child: Icon(
+              playerController.syncplay.isRoomOperator
+                  ? Icons.workspace_premium_rounded
+                  : Icons.lock_person_rounded,
+              color: Colors.white70,
+              size: 19,
+            ),
+          ),
         // Position reads stay inside these narrow Observers so the 1s progress
         // tick rebuilds only the bar and time text, not the whole bottom bar.
         Expanded(
           child: Observer(builder: (context) {
+            final canControl =
+                playerController.syncplay.canControlLocalPlayback;
             return ProgressBar(
               thumbRadius: 8,
               thumbGlowRadius: 18,
@@ -439,10 +461,14 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
               progress: playerController.playback.currentPosition,
               buffered: playerController.playback.buffer,
               total: playerController.playback.duration,
-              onSeek: widget.handleProgressBarSeek,
-              onDragStart: (_) => widget.handleProgressBarDragStart(),
-              onDragUpdate: (details) => playerController.seeking
-                  .updateInteractiveSeek(details.timeStamp),
+              onSeek: canControl ? widget.handleProgressBarSeek : null,
+              onDragStart: canControl
+                  ? (_) => widget.handleProgressBarDragStart()
+                  : null,
+              onDragUpdate: canControl
+                  ? (details) => playerController.seeking
+                      .updateInteractiveSeek(details.timeStamp)
+                  : null,
             );
           }),
         ),
@@ -586,9 +612,12 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
                   for (final double i
                       in defaultPlaySpeedList) ...<MenuItemButton>[
                     MenuItemButton(
-                      onPressed: () async {
-                        await widget.setPlaybackSpeed(i);
-                      },
+                      onPressed:
+                          playerController.syncplay.canChangePlaybackSpeed
+                              ? () async {
+                                  await widget.setPlaybackSpeed(i);
+                                }
+                              : null,
                       child: Container(
                         height: 48,
                         constraints: BoxConstraints(minWidth: 112),
@@ -612,7 +641,11 @@ class _SmallestPlayerItemPanelState extends State<SmallestPlayerItemPanel> {
                   constraints: BoxConstraints(minWidth: 112),
                   child: Align(
                     alignment: Alignment.centerLeft,
-                    child: Text("倍速"),
+                    child: Text(
+                      playerController.syncplay.canChangePlaybackSpeed
+                          ? '倍速'
+                          : '倍速（房间锁定）',
+                    ),
                   ),
                 ),
               ),

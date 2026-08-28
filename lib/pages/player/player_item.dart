@@ -398,6 +398,10 @@ class _PlayerItemState extends State<PlayerItem>
   }
 
   Future<void> handlePreNextEpisode(String direction) async {
+    if (!playerController.syncplay.canControlLocalPlayback) {
+      KazumiDialog.showToast(message: '当前由主持人控制选集');
+      return;
+    }
     if (videoPageController.loading) return;
     final selection = videoPageController.selectedEpisode;
     final currentRoad = selection.road;
@@ -706,6 +710,9 @@ class _PlayerItemState extends State<PlayerItem>
   }
 
   void _beginInteractiveSeek() {
+    if (!playerController.syncplay.canControlLocalPlayback) {
+      return;
+    }
     _progressBarDragHold?.release();
     _progressBarDragHold = null;
     playerTimer?.cancel();
@@ -964,6 +971,10 @@ class _PlayerItemState extends State<PlayerItem>
   }
 
   Future<void> setPlaybackSpeed(double speed) async {
+    if (!playerController.syncplay.canChangePlaybackSpeed) {
+      playerController.panel.showPlaySpeed = false;
+      return;
+    }
     await playerController.setPlaybackSpeed(speed);
   }
 
@@ -1150,9 +1161,12 @@ class _PlayerItemState extends State<PlayerItem>
         if (playerController.playback.resumedNearEnd) {
           // Completion of a stale near-end resume is not a real watch;
           // replay from the beginning instead of advancing.
-          unawaited(playerController.playback.restartFromBeginning());
+          if (playerController.syncplay.canControlLocalPlayback) {
+            unawaited(playerController.playback.restartFromBeginning());
+          }
         } else if (playingSelection.episode < playingRoadData.data.length &&
-            autoPlayNext) {
+            autoPlayNext &&
+            playerController.syncplay.canControlLocalPlayback) {
           final nextSelection = VideoEpisodeSelection(
             episode: playingSelection.episode + 1,
             road: playingSelection.road,
