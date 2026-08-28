@@ -199,6 +199,50 @@ void main() {
     await _disposeController(controller, [client]);
   });
 
+  test('navigating away preserves room state and retires the old binding',
+      () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor([client]);
+    await controller.createRoom('room-a', 'alice');
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 9,
+      playing: true,
+    )..seekGate = Completer<void>();
+    final attachment = controller.attachPlayback(binding);
+
+    client.emitFileChanged(name: '12345[9]', setBy: 'peer');
+    client.emitChat(username: 'peer', message: 'keep this message');
+    client.emitPosition(position: 12, paused: true, doSeek: true);
+    await _settle();
+
+    final media = controller.currentMedia;
+    expect(media, isNotNull);
+    expect(controller.chatMessages,
+        anyElement((message) => message.message == 'keep this message'));
+    expect(binding.seekCalls, [const Duration(seconds: 12)]);
+
+    // VideoPage's normal route exit calls PlayerController.beginShutdown,
+    // which synchronously detaches this temporary binding but does not own
+    // the app-scoped room session.
+    controller.detachPlayback(attachment);
+    binding.seekGate!.complete();
+    client.emitPosition(position: 24, paused: false, doSeek: true);
+    await _settle();
+
+    expect(controller.connectionState, SyncPlayConnectionState.connected);
+    expect(controller.syncplayRoom, 'room-a');
+    expect(controller.currentMedia, same(media));
+    expect(controller.chatMessages,
+        anyElement((message) => message.message == 'keep this message'));
+    expect(binding.seekCalls, [const Duration(seconds: 12)]);
+    expect(binding.pauseCalls, 0);
+    expect(binding.playCalls, 0);
+    expect(client.disconnectCalls, 0);
+
+    await _disposeController(controller, [client]);
+  });
+
   test('explicit exit clears the connection, media and chat state', () async {
     final client = FakeSyncplayClient();
     final controller = _controllerFor([client]);
@@ -312,6 +356,16 @@ void main() {
       currentEpisode: 9,
     );
     controller.attachPlayback(binding);
+    await _settle();
+
+    // Attaching to an empty room publishes the video-first media once. Clear
+    // that automatic publication before exercising the explicit sync API.
+    expect(client.setPlayingNames, ['12345[9]']);
+    expect(client.syncRequests, [null]);
+    client.setPlayingNames.clear();
+    client.pausedValues.clear();
+    client.positions.clear();
+    client.syncRequests.clear();
 
     await controller.setPlayingBangumi(
       forceSyncPlaying: true,

@@ -18,6 +18,7 @@ import 'package:kazumi/utils/theme.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 
 class AppWidget extends StatefulWidget {
   const AppWidget({super.key});
@@ -124,9 +125,37 @@ class _AppWidgetState extends State<AppWidget>
         return;
       }
     }
-    inviteService.acceptCandidate(confirmUnknownServer: confirmUnknown);
+    final acceptedInvite = inviteService.acceptCandidate(
+      confirmUnknownServer: confirmUnknown,
+    )
+        ? inviteService.takePending()
+        : null;
     _showingInvitePrompt = false;
-    KazumiDialog.showToast(message: '邀请已保存，请打开对应番剧和剧集继续');
+    if (acceptedInvite != null) {
+      await _openInviteRoom(acceptedInvite);
+    }
+  }
+
+  Future<void> _openInviteRoom(SyncPlayInvite invite) async {
+    await GStorage.putSetting<String>(
+      SettingsKeys.syncPlayEndPoint,
+      invite.server,
+    );
+    var username =
+        GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
+    if (username.isEmpty) {
+      username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
+      await GStorage.putSetting<String>(
+        SettingsKeys.syncPlayUserName,
+        username,
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    context.pushNamed('/syncplay-room/');
+    unawaited(roomSession.createRoom(invite.room, username));
+    KazumiDialog.showToast(message: '已进入聊天室，请在房间页选择番剧后播放');
   }
 
   Future<void> _initializePlatformIntegrations() async {

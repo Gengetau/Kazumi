@@ -15,10 +15,8 @@ class SyncPlayRoomSessionController
     extends PlayerSyncPlayController
     implements Disposable {
   SyncPlayRoomSessionController({
-    SyncplayClientFactory? clientFactory,
-    @visibleForTesting String Function()? endpointProvider,
-  }) : super(
-          clientFactory: clientFactory,
-          endpointProvider: endpointProvider,
-        );
+    super.clientFactory,
+    @visibleForTesting super.endpointProvider,
+    @visibleForTesting super.mediaSelectionTimeout,
+  });
 }

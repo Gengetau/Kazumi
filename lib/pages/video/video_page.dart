@@ -30,6 +30,7 @@ import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_room_notice.dart';
+import 'package:kazumi/services/player/syncplay_room_models.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:mobx/mobx.dart' as mobx;
@@ -88,9 +89,11 @@ class _VideoPageState extends State<VideoPage>
   late final bool disableAnimations;
 
   StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
+  StreamSubscription<SyncPlayRoomMediaEvent>? _syncMediaSubscription;
   StreamSubscription<SyncPlayInvite>? _pendingInviteSubscription;
   late final Object _chatSurfaceToken;
   late final mobx.ReactionDisposer _pipModeListener;
+  bool _roomMismatchDialogShown = false;
 
   static const Duration _offlinePlayerInitDelay = Duration(milliseconds: 400);
   static const Duration _sideTabAnimationDuration = Duration(milliseconds: 120);
@@ -100,6 +103,9 @@ class _VideoPageState extends State<VideoPage>
     super.initState();
     _chatSurfaceToken = roomSession.registerChatSurface();
     playerController.resetSyncPlayChatEntryPrompt();
+    videoPageController.setPlaybackLaunchIntentValidator(
+      _isPlaybackLaunchIntentCurrent,
+    );
     videoPageController.applyPlaybackArgs(widget.args);
     windowManager.addListener(this);
     // Window fullscreen can be changed outside this page through system chrome.
@@ -143,6 +149,68 @@ class _VideoPageState extends State<VideoPage>
       },
     );
     _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
+    _syncMediaSubscription = roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+  }
+
+  bool _isPlaybackLaunchIntentCurrent() {
+    final intent = widget.args.launchIntent;
+    return intent == null || roomSession.isPlaybackLaunchIntentCurrent(intent);
+  }
+
+  void _handleRoomMediaEvent(SyncPlayRoomMediaEvent event) {
+    if (!mounted ||
+        event is! SyncPlayRoomMediaMismatch ||
+        _roomMismatchDialogShown) {
+      return;
+    }
+    _roomMismatchDialogShown = true;
+    unawaited(_showRoomMediaMismatch(event));
+  }
+
+  Future<void> _showRoomMediaMismatch(SyncPlayRoomMediaMismatch event) async {
+    final sameBangumi = event.localBangumiId == event.roomMedia.bangumiId;
+    final action = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          sameBangumi ? '房间已经切换到第 ${event.roomMedia.episode} 集' : '房间已经切换到其他番剧',
+        ),
+        content: Text(
+          sameBangumi
+              ? '是否跟随房间切换到第 ${event.roomMedia.episode} 集？'
+              : '房间当前媒体为 Bangumi #${event.roomMedia.bangumiId}，当前播放器不会自动切换番剧。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('暂不跟随'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(sameBangumi ? '跟随房间' : '返回聊天室'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    _roomMismatchDialogShown = false;
+    if (action != true) {
+      return;
+    }
+    if (sameBangumi) {
+      final latest = roomSession.currentMedia;
+      if (latest == null ||
+          latest.generation != event.roomMedia.generation ||
+          latest.bangumiId != event.roomMedia.bangumiId ||
+          latest.episode != event.roomMedia.episode) {
+        return;
+      }
+      await changeEpisode(event.roomMedia.episode);
+    } else {
+      await context.pushNamed('/syncplay-room/');
+    }
   }
 
   void _handleRoomNotice(SyncPlayRoomNotice notice) {
@@ -254,19 +322,23 @@ class _VideoPageState extends State<VideoPage>
   void _initOnlineMode(PlayerController playerController) {
     videoPageController.historyOffset = 0;
 
-    var progress = historyController.lastWatching(
-        videoPageController.bangumiItem,
-        videoPageController.currentPlugin.name);
-    if (progress != null) {
-      if (videoPageController.roadList.length > progress.road) {
-        if (videoPageController.roadList[progress.road].data.length >=
-            progress.episode) {
-          videoPageController.resetEpisodeState(
-            episode: progress.episode,
-            road: progress.road,
-          );
-          if (playResume) {
-            videoPageController.historyOffset = progress.progress.inSeconds;
+    // A room-first route carries an authoritative room episode.  Do not let
+    // local watch history replace it before the first asynchronous resolve.
+    if (videoPageController.playbackLaunchIntent == null) {
+      var progress = historyController.lastWatching(
+          videoPageController.bangumiItem,
+          videoPageController.currentPlugin.name);
+      if (progress != null) {
+        if (videoPageController.roadList.length > progress.road) {
+          if (videoPageController.roadList[progress.road].data.length >=
+              progress.episode) {
+            videoPageController.resetEpisodeState(
+              episode: progress.episode,
+              road: progress.road,
+            );
+            if (playResume) {
+              videoPageController.historyOffset = progress.progress.inSeconds;
+            }
           }
         }
       }
@@ -308,6 +380,9 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     try {
       _syncNoticeSubscription?.cancel();
+    } catch (_) {}
+    try {
+      _syncMediaSubscription?.cancel();
     } catch (_) {}
     try {
       _pendingInviteSubscription?.cancel();
@@ -611,10 +686,9 @@ class _VideoPageState extends State<VideoPage>
       return;
     }
     _isClosing = true;
-    // PR1 keeps the historical VideoPage exit behaviour.  The app-scoped
-    // session itself is not owned by PlayerController, so leave the room
-    // explicitly before removing this route.
-    await roomSession.exitRoom();
+    // VideoPage owns only the temporary playback binding.  The app-scoped
+    // room session must survive navigation so the room, chat and selected
+    // media remain available when the user opens another surface.
     playerController.beginShutdown();
     if (!context.mounted) {
       return;
@@ -630,14 +704,7 @@ class _VideoPageState extends State<VideoPage>
 
   Future<void> _handlePendingInvite(SyncPlayInvite invite) async {
     if (!mounted) return;
-    if (invite.bangumi != null &&
-        invite.bangumi != playerController.currentBangumiId) {
-      KazumiDialog.showToast(message: '邀请对应其他番剧，请先打开对应作品');
-      return;
-    }
-    if (invite.episode != null &&
-        invite.episode != playerController.currentPlaybackEpisode) {
-      KazumiDialog.showToast(message: '邀请对应第 ${invite.episode} 集，请先手动切换剧集');
+    if (inviteService.pending?.fingerprint != invite.fingerprint) {
       return;
     }
     await GStorage.putSetting<String>(

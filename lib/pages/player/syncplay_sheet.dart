@@ -11,6 +11,8 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -23,32 +25,36 @@ Future<void> showSyncPlaySheet(
   BuildContext context, {
   required PlayerController playerController,
   required Future<void> Function(int episode, {int currentRoad, int offset})
-      changeEpisode,
+  changeEpisode,
 }) async {
   final _SyncPlayDestination? destination =
       await _showStep<_SyncPlayDestination>(
-    context,
-    (context) => _SyncPlayHomeSheet(playerController: playerController),
-  );
+        context,
+        (context) => _SyncPlayHomeSheet(playerController: playerController),
+      );
   if (destination == null || !context.mounted) {
     return;
   }
   await _showStep<void>(
     context,
     (context) => switch (destination) {
-      _SyncPlayDestination.create ||
-      _SyncPlayDestination.join =>
-        _SyncPlayRoomSheet(
-          isCreate: destination == _SyncPlayDestination.create,
-          playerController: playerController,
-          changeEpisode: changeEpisode,
-        ),
-      _SyncPlayDestination.server => _SyncPlayServerSheet(
-          onSaved: playerController.syncplay.connectionState ==
-                  SyncPlayConnectionState.failed
-              ? playerController.syncplay.retryConnection
-              : null,
-        ),
+      _SyncPlayDestination.create || _SyncPlayDestination.join =>
+        destination == _SyncPlayDestination.create
+            ? SyncPlayCreateRoomForm(
+                onSubmit: (room, username) => playerController
+                    .createSyncPlayRoom(room, username, changeEpisode),
+              )
+            : SyncPlayJoinRoomForm(
+                onSubmit: (room, username) => playerController
+                    .createSyncPlayRoom(room, username, changeEpisode),
+              ),
+      _SyncPlayDestination.server => SyncPlayServerForm(
+        onSaved:
+            playerController.syncplay.connectionState ==
+                SyncPlayConnectionState.failed
+            ? playerController.syncplay.retryConnection
+            : null,
+      ),
     },
   );
 }
@@ -62,8 +68,14 @@ Future<T?> _showStep<T>(BuildContext context, WidgetBuilder builder) {
   );
 }
 
-String _readEndPoint() =>
-    GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
+String _readEndPoint() {
+  try {
+    final endpoint = GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
+    return endpoint.isEmpty ? defaultSyncPlayEndPoint : endpoint;
+  } catch (_) {
+    return defaultSyncPlayEndPoint;
+  }
+}
 
 /// M3 outlined field on the sheet's tonal cards, carrying the cards' radius
 /// instead of the 4dp baseline.
@@ -126,7 +138,11 @@ class _SyncPlaySheetScaffold extends StatelessWidget {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-                20, compact ? 12 : 20, 12, compact ? 10 : 16),
+              20,
+              compact ? 12 : 20,
+              12,
+              compact ? 10 : 16,
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -136,13 +152,14 @@ class _SyncPlaySheetScaffold extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: (compact
-                                ? theme.textTheme.titleLarge
-                                : theme.textTheme.headlineSmall)
-                            ?.copyWith(
-                          color: colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                        ),
+                        style:
+                            (compact
+                                    ? theme.textTheme.titleLarge
+                                    : theme.textTheme.headlineSmall)
+                                ?.copyWith(
+                                  color: colorScheme.onSurface,
+                                  fontWeight: FontWeight.w700,
+                                ),
                       ),
                       if (showDescription) ...[
                         const SizedBox(height: 4),
@@ -202,10 +219,35 @@ class _SyncPlaySheetScaffold extends StatelessWidget {
   }
 }
 
-class _SyncPlayHomeSheet extends StatelessWidget {
-  const _SyncPlayHomeSheet({required this.playerController});
+/// Shared room status/lobby content used by the player sheet and RoomPage.
+///
+/// This widget deliberately owns no connection action. The caller decides
+/// whether an action opens another sheet or a persistent-page dialog, while
+/// all room state continues to come from the app-scoped session.
+class SyncPlayRoomHome extends StatelessWidget {
+  const SyncPlayRoomHome({
+    super.key,
+    required this.controller,
+    this.compact = false,
+    this.onCreateRoom,
+    this.onJoinRoom,
+    this.onServerSettings,
+    this.onRetry,
+    this.inviteTextBuilder,
+    this.enableClipboardJoin = false,
+    this.onClipboardInviteAccepted,
+  });
 
-  final PlayerController playerController;
+  final SyncPlayRoomSessionController controller;
+  final bool compact;
+  final VoidCallback? onCreateRoom;
+  final VoidCallback? onJoinRoom;
+  final VoidCallback? onServerSettings;
+  final VoidCallback? onRetry;
+  final String Function()? inviteTextBuilder;
+  final bool enableClipboardJoin;
+  final Future<void> Function(SyncPlayInvite invite)?
+      onClipboardInviteAccepted;
 
   Future<void> _joinFromClipboard(BuildContext context) async {
     final service = inject<SyncPlayClipboardInviteService>();
@@ -239,7 +281,8 @@ class _SyncPlayHomeSheet extends StatelessWidget {
     }
     var confirmUnknown = false;
     if (service.candidateNeedsServerConfirmation) {
-      confirmUnknown = await showDialog<bool>(
+      confirmUnknown =
+          await showDialog<bool>(
             context: context,
             builder: (dialogContext) => AlertDialog(
               title: const Text('确认自定义服务器'),
@@ -262,72 +305,51 @@ class _SyncPlayHomeSheet extends StatelessWidget {
       service.rejectCandidate();
       return;
     }
-    if (context.mounted) Navigator.of(context).pop();
+    if (!context.mounted) {
+      return;
+    }
+    final onAccepted = onClipboardInviteAccepted;
+    if (onAccepted != null) {
+      await onAccepted(invite);
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Observer(
+      builder: (context) {
+        final hasSession = controller.hasSession;
+        final room = controller.syncplayRoom;
+        final state = controller.connectionState;
+        final connected =
+            state == SyncPlayConnectionState.connected && room.isNotEmpty;
+        final connecting =
+            state == SyncPlayConnectionState.connecting ||
+            state == SyncPlayConnectionState.reconnecting ||
+            (hasSession && !connected);
 
-    return Observer(builder: (context) {
-      // Read every observable here and unconditionally: the body builder runs
-      // from the scaffold's build, where reads are no longer tracked, and a
-      // short-circuited read would register no dependency.
-      final bool hasSession = playerController.syncplay.hasSession;
-      final String room = playerController.syncplay.syncplayRoom;
-      final int rtt = playerController.syncplay.syncplayClientRtt;
-      final state = playerController.syncplay.connectionState;
-      final bool connected =
-          state == SyncPlayConnectionState.connected && room.isNotEmpty;
-      // Connected socket, room not joined yet. The server picker must stay out
-      // of reach, otherwise the saved address stops matching what we dialed.
-      final bool connecting = state == SyncPlayConnectionState.connecting ||
-          state == SyncPlayConnectionState.reconnecting ||
-          (hasSession && !connected);
-      final bool failed = state == SyncPlayConnectionState.failed;
-
-      return _SyncPlaySheetScaffold(
-        title: '一起看',
-        description: '与好友同步播放、暂停与选集',
-        primaryAction: hasSession
-            ? FilledButton.tonalIcon(
-                onPressed: () async {
-                  await playerController.exitSyncPlayRoom();
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: colorScheme.errorContainer,
-                  foregroundColor: colorScheme.onErrorContainer,
-                ),
-                icon: const Icon(Icons.logout_rounded),
-                label: Text(connecting ? '取消连接' : '断开连接'),
-              )
-            : null,
-        bodyBuilder: (context, compact) {
-          if (connected) {
-            return _buildConnected(context, room: room, rtt: rtt);
-          }
-          if (connecting) {
-            return _buildConnecting(
-              context,
-              reconnecting: state == SyncPlayConnectionState.reconnecting,
-            );
-          }
-          if (failed) {
-            return _buildFailed(context);
-          }
-          return _buildLobby(context, compact: compact);
-        },
-      );
-    });
+        if (connected) {
+          return _buildConnected(context, room: room);
+        }
+        if (connecting) {
+          return _buildConnecting(
+            context,
+            reconnecting: state == SyncPlayConnectionState.reconnecting,
+          );
+        }
+        if (state == SyncPlayConnectionState.failed) {
+          return _buildFailed(context);
+        }
+        return _buildLobby(context);
+      },
+    );
   }
 
-  Widget _buildConnecting(
-    BuildContext context, {
-    required bool reconnecting,
-  }) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colorScheme = theme.colorScheme;
-
+  Widget _buildConnecting(BuildContext context, {required bool reconnecting}) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Material(
       color: colorScheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(materialBottomSheetRadius),
@@ -371,8 +393,8 @@ class _SyncPlayHomeSheet extends StatelessWidget {
   }
 
   Widget _buildFailed(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colorScheme = theme.colorScheme;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Material(
       color: colorScheme.errorContainer,
       borderRadius: BorderRadius.circular(materialBottomSheetRadius),
@@ -406,8 +428,7 @@ class _SyncPlayHomeSheet extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   OutlinedButton.icon(
-                    onPressed: () =>
-                        Navigator.of(context).pop(_SyncPlayDestination.server),
+                    onPressed: onServerSettings,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: colorScheme.onErrorContainer,
                     ),
@@ -415,7 +436,7 @@ class _SyncPlayHomeSheet extends StatelessWidget {
                     label: const Text('更换服务器'),
                   ),
                   FilledButton.tonal(
-                    onPressed: playerController.syncplay.retryConnection,
+                    onPressed: onRetry ?? controller.retryConnection,
                     child: const Text('重试'),
                   ),
                 ],
@@ -427,28 +448,40 @@ class _SyncPlayHomeSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildLobby(BuildContext context, {required bool compact}) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colorScheme = theme.colorScheme;
-
-    final Widget create = _ChoiceCard(
+  Widget _buildLobby(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final create = _ChoiceCard(
       icon: Icons.add_home_outlined,
       title: '创建房间',
       description: '生成房间号并邀请好友',
       emphasized: true,
-      onTap: () => Navigator.of(context).pop(_SyncPlayDestination.create),
+      onTap: onCreateRoom ?? () {},
     );
-    final Widget join = _ChoiceCard(
+    final join = _ChoiceCard(
       icon: Icons.login_rounded,
       title: '加入房间',
       description: '已有好友的房间号',
       emphasized: false,
-      onTap: () => Navigator.of(context).pop(_SyncPlayDestination.join),
+      onTap: onJoinRoom ?? () {},
     );
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text(
+          '一起看聊天室',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '和朋友创建一个房间，先聊天，再决定看什么',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 16),
         if (compact)
           IntrinsicHeight(
             child: Row(
@@ -465,22 +498,28 @@ class _SyncPlayHomeSheet extends StatelessWidget {
           const SizedBox(height: 12),
           join,
         ],
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => _joinFromClipboard(context),
-          icon: const Icon(Icons.content_paste_go_rounded),
-          label: const Text('从剪贴板加入'),
-        ),
+        if (enableClipboardJoin) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => _joinFromClipboard(context),
+            icon: const Icon(Icons.content_paste_go_rounded),
+            label: const Text('从剪贴板加入'),
+          ),
+        ],
         const SizedBox(height: 16),
         Material(
           color: colorScheme.surfaceContainerLow,
           borderRadius: BorderRadius.circular(materialBottomSheetRadius),
           clipBehavior: Clip.antiAlias,
           child: ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-            leading:
-                Icon(Icons.dns_outlined, color: colorScheme.onSurfaceVariant),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 4,
+            ),
+            leading: Icon(
+              Icons.dns_outlined,
+              color: colorScheme.onSurfaceVariant,
+            ),
             title: Text(
               '同步服务器',
               style: theme.textTheme.bodyMedium?.copyWith(
@@ -496,31 +535,26 @@ class _SyncPlayHomeSheet extends StatelessWidget {
               ),
             ),
             trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).pop(_SyncPlayDestination.server),
+            onTap: onServerSettings,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildConnected(
-    BuildContext context, {
-    required String room,
-    required int rtt,
-  }) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colorScheme = theme.colorScheme;
-
+  Widget _buildConnected(BuildContext context, {required String room}) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _RoomNumberCard(
           room: room,
-          label: '当前房间',
+          label: '当前房间 · 已连接',
           trailing: [
             _CopyButton(value: room),
             _CopyButton(
-              value: playerController.syncPlayInviteText(),
+              value: inviteTextBuilder?.call() ?? 'Kazumi 一起看邀请\n房间：$room',
               tooltip: '复制邀请',
             ),
           ],
@@ -536,7 +570,7 @@ class _SyncPlayHomeSheet extends StatelessWidget {
                 context,
                 icon: Icons.network_ping_rounded,
                 label: '网络延迟',
-                value: '$rtt ms',
+                value: '${controller.syncplayClientRtt} ms',
               ),
               Divider(height: 1, indent: 56, color: colorScheme.outlineVariant),
               _buildInfoRow(
@@ -565,9 +599,8 @@ class _SyncPlayHomeSheet extends StatelessWidget {
     required String label,
     required String value,
   }) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme colorScheme = theme.colorScheme;
-
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       child: Row(
@@ -594,6 +627,54 @@ class _SyncPlayHomeSheet extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SyncPlayHomeSheet extends StatelessWidget {
+  const _SyncPlayHomeSheet({required this.playerController});
+
+  final PlayerController playerController;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Observer(
+      builder: (context) {
+        final hasSession = playerController.syncplay.hasSession;
+        final state = playerController.syncplay.connectionState;
+        final connecting =
+            state == SyncPlayConnectionState.connecting ||
+            state == SyncPlayConnectionState.reconnecting ||
+            (hasSession && playerController.syncplay.syncplayRoom.isEmpty);
+        return _SyncPlaySheetScaffold(
+          title: '一起看',
+          description: '与好友同步播放、暂停与选集',
+          primaryAction: hasSession
+              ? FilledButton.tonalIcon(
+                  onPressed: playerController.exitSyncPlayRoom,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colorScheme.errorContainer,
+                    foregroundColor: colorScheme.onErrorContainer,
+                  ),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: Text(connecting ? '取消连接' : '断开连接'),
+                )
+              : null,
+          bodyBuilder: (context, compact) => SyncPlayRoomHome(
+            controller: playerController.syncplay,
+            compact: compact,
+            onCreateRoom: () =>
+                Navigator.of(context).pop(_SyncPlayDestination.create),
+            onJoinRoom: () =>
+                Navigator.of(context).pop(_SyncPlayDestination.join),
+            onServerSettings: () =>
+                Navigator.of(context).pop(_SyncPlayDestination.server),
+            inviteTextBuilder: playerController.syncPlayInviteText,
+            enableClipboardJoin: true,
+          ),
+        );
+      },
     );
   }
 }
@@ -670,23 +751,32 @@ class _ChoiceCard extends StatelessWidget {
   }
 }
 
-class _SyncPlayRoomSheet extends StatefulWidget {
-  const _SyncPlayRoomSheet({
-    required this.isCreate,
-    required this.playerController,
-    required this.changeEpisode,
-  });
+/// Shared form base for the create and join room flows.
+///
+/// The connection callback is supplied by the host. This keeps the form
+/// usable by both the legacy player sheet and the persistent RoomPage without
+/// introducing a second room/session implementation.
+abstract class SyncPlayRoomForm extends StatefulWidget {
+  const SyncPlayRoomForm({super.key, required this.onSubmit});
 
-  final bool isCreate;
-  final PlayerController playerController;
-  final Future<void> Function(int episode, {int currentRoad, int offset})
-      changeEpisode;
-
-  @override
-  State<_SyncPlayRoomSheet> createState() => _SyncPlayRoomSheetState();
+  final Future<void> Function(String room, String username) onSubmit;
 }
 
-class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
+class SyncPlayCreateRoomForm extends SyncPlayRoomForm {
+  const SyncPlayCreateRoomForm({super.key, required super.onSubmit});
+
+  @override
+  State<SyncPlayRoomForm> createState() => _SyncPlayRoomFormState();
+}
+
+class SyncPlayJoinRoomForm extends SyncPlayRoomForm {
+  const SyncPlayJoinRoomForm({super.key, required super.onSubmit});
+
+  @override
+  State<SyncPlayRoomForm> createState() => _SyncPlayRoomFormState();
+}
+
+class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
   static final Random _random = Random();
 
   /// Eight digits keeps accidental collisions with strangers on the public
@@ -718,8 +808,14 @@ class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
   @override
   void initState() {
     super.initState();
-    _usernameController.text =
-        GStorage.getSetting<String>(SettingsKeys.syncPlayUserName);
+    try {
+      _usernameController.text = GStorage.getSetting<String>(
+        SettingsKeys.syncPlayUserName,
+      );
+    } catch (_) {
+      // Isolated RoomPage/widget tests may build the form before Hive starts.
+      _usernameController.text = '';
+    }
     if (_usernameController.text.isEmpty) {
       _usernameController.text = _generateUserName();
     }
@@ -737,19 +833,19 @@ class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
       return;
     }
     final String username = _usernameController.text.trim();
-    final String room =
-        widget.isCreate ? _createdRoom : _roomController.text.trim();
+    final String room = widget is SyncPlayCreateRoomForm
+        ? _createdRoom
+        : _roomController.text.trim();
     GStorage.putSetting<String>(SettingsKeys.syncPlayUserName, username);
     // Close first so the connection toasts land on the page underneath rather
     // than behind this sheet.
     Navigator.of(context).pop();
-    widget.playerController
-        .createSyncPlayRoom(room, username, widget.changeEpisode);
+    unawaited(widget.onSubmit(room, username));
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isCreate = widget.isCreate;
+    final bool isCreate = widget is SyncPlayCreateRoomForm;
 
     return _SyncPlaySheetScaffold(
       title: isCreate ? '创建房间' : '加入房间',
@@ -758,7 +854,8 @@ class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
       primaryAction: FilledButton.icon(
         onPressed: _submit,
         icon: Icon(
-            isCreate ? Icons.play_circle_outline_rounded : Icons.login_rounded),
+          isCreate ? Icons.play_circle_outline_rounded : Icons.login_rounded,
+        ),
         label: Text(isCreate ? '创建并加入' : '加入房间'),
       ),
       bodyBuilder: (context, compact) {
@@ -854,16 +951,16 @@ class _SyncPlayRoomSheetState extends State<_SyncPlayRoomSheet> {
   }
 }
 
-class _SyncPlayServerSheet extends StatefulWidget {
-  const _SyncPlayServerSheet({this.onSaved});
+class SyncPlayServerForm extends StatefulWidget {
+  const SyncPlayServerForm({super.key, this.onSaved});
 
   final Future<void> Function()? onSaved;
 
   @override
-  State<_SyncPlayServerSheet> createState() => _SyncPlayServerSheetState();
+  State<SyncPlayServerForm> createState() => _SyncPlayServerFormState();
 }
 
-class _SyncPlayServerSheetState extends State<_SyncPlayServerSheet> {
+class _SyncPlayServerFormState extends State<SyncPlayServerForm> {
   /// Stands in for a user supplied address in the otherwise fixed list.
   static const String _customOption = '自定义服务器';
 
@@ -921,10 +1018,7 @@ class _SyncPlayServerSheetState extends State<_SyncPlayServerSheet> {
       title: '同步服务器',
       description: '房间成员需使用同一服务器',
       showCancel: true,
-      primaryAction: FilledButton(
-        onPressed: _save,
-        child: const Text('保存'),
-      ),
+      primaryAction: FilledButton(onPressed: _save, child: const Text('保存')),
       bodyBuilder: (context, compact) {
         final ColorScheme colorScheme = Theme.of(context).colorScheme;
         final List<String> endPoints = [
@@ -1042,8 +1136,9 @@ class _RoomNumberCard extends StatelessWidget {
                 Text(
                   label,
                   style: theme.textTheme.labelMedium?.copyWith(
-                    color:
-                        colorScheme.onPrimaryContainer.withValues(alpha: 0.75),
+                    color: colorScheme.onPrimaryContainer.withValues(
+                      alpha: 0.75,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 2),
