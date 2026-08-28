@@ -61,6 +61,7 @@
       flutter-test:
         if: ${{ github.event_name == 'workflow_dispatch' || ! github.event.pull_request.draft }}
         runs-on: "ubuntu-latest"
+        timeout-minutes: 10
         permissions:
           contents: read
         steps:
