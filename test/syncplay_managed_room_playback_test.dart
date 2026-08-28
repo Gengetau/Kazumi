@@ -139,6 +139,34 @@ void main() {
     await _dispose(controller, client);
   });
 
+  test('player-first members become local-only in an empty managed room',
+      () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _managedFeatures,
+    );
+    final controller = _controllerFor(client);
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 1,
+      playing: true,
+    );
+    controller.attachPlayback(binding);
+
+    await _joinManagedRoom(controller, client, localOperator: false);
+
+    expect(controller.currentMedia, isNull);
+    expect(
+      controller.playbackParticipation,
+      SyncPlayPlaybackParticipation.localOnly,
+    );
+    expect(controller.canControlLocalPlayback, isTrue);
+    expect(controller.shouldBroadcastLocalPlayback, isFalse);
+    expect(controller.canChangePlaybackSpeed, isTrue);
+
+    await _dispose(controller, client);
+  });
+
   test('managed operators control the shared timeline and media', () async {
     final client = FakeSyncplayClient(
       acceptedRoom: _managedRoom,

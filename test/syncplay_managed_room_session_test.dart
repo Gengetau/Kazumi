@@ -293,10 +293,35 @@ void main() {
     expect(controller.currentMedia, isNull);
 
     client.emitControllerAuth(
-      username: 'new-host',
+      username: 'other-host',
       room: _managedRoom,
       success: true,
     );
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.currentMedia, isNull);
+
+    client.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: false,
+      ),
+      SyncplayRoomUser(
+        username: 'host',
+        room: _managedRoom,
+        isController: true,
+      ),
+      SyncplayRoomUser(
+        username: 'other-host',
+        room: _managedRoom,
+        isController: true,
+      ),
+      SyncplayRoomUser(
+        username: 'new-host',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
     await _settleUntil(() => controller.currentMedia != null);
 
     expect(controller.roomUsers['new-host']?.isController, isTrue);

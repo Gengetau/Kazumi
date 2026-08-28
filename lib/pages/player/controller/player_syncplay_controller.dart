@@ -1226,6 +1226,12 @@ abstract class _PlayerSyncPlayController with Store {
       }
       connectionState = SyncPlayConnectionState.connected;
       final binding = _playbackBinding;
+      if (binding != null) {
+        // The player can be attached before the Hello transaction reveals
+        // that this is a managed room. Re-evaluate participation against the
+        // authoritative room mode instead of keeping the pre-connect value.
+        _updatePlaybackParticipation(binding);
+      }
       if (currentMedia == null && binding != null) {
         // Video-first entry publishes the local media only after the server
         // has confirmed the room.  A room-first page has no binding and
@@ -1415,7 +1421,10 @@ abstract class _PlayerSyncPlayController with Store {
           ? SyncPlayOperatorAuthState.operator
           : SyncPlayOperatorAuthState.failed;
     }
-    _drainPendingManagedMediaEvents();
+    _drainPendingManagedMediaEvents(
+      resolvedUsername: username,
+      resolvedIsController: result.success,
+    );
   }
 
   void _applyUserListSnapshot(SyncplayUserListSnapshot snapshot) {
@@ -1441,7 +1450,7 @@ abstract class _PlayerSyncPlayController with Store {
     } else if (_operatorAuthState.value != SyncPlayOperatorAuthState.failed) {
       _operatorAuthState.value = SyncPlayOperatorAuthState.none;
     }
-    _drainPendingManagedMediaEvents();
+    _drainPendingManagedMediaEvents(authoritativeSnapshot: true);
   }
 
   /// Repeats the last requested room using the existing session's history.
@@ -1639,18 +1648,46 @@ abstract class _PlayerSyncPlayController with Store {
     );
   }
 
-  void _drainPendingManagedMediaEvents() {
+  void _drainPendingManagedMediaEvents({
+    String? resolvedUsername,
+    bool? resolvedIsController,
+    bool authoritativeSnapshot = false,
+  }) {
     if (_pendingManagedMediaEvents.isEmpty) {
       return;
     }
     final pending = List<Map<String, dynamic>>.from(
       _pendingManagedMediaEvents,
     );
-    _pendingManagedMediaEvents.clear();
-    _pendingManagedMediaEventsTimer?.cancel();
-    _pendingManagedMediaEventsTimer = null;
+    final retained = <Map<String, dynamic>>[];
     for (final message in pending) {
-      _handleRemoteMediaChanged(message, allowRoleWait: false);
+      final sender = normalizeSyncPlayUsername(
+        message['setBy'],
+        fallback: '',
+      );
+      if (sender.isEmpty) {
+        continue;
+      }
+      if (authoritativeSnapshot) {
+        if (roomUsers[sender]?.isController == true) {
+          _handleRemoteMediaChanged(message, allowRoleWait: false);
+        }
+        continue;
+      }
+      if (sender != resolvedUsername) {
+        retained.add(message);
+        continue;
+      }
+      if (resolvedIsController == true) {
+        _handleRemoteMediaChanged(message, allowRoleWait: false);
+      }
+    }
+    _pendingManagedMediaEvents
+      ..clear()
+      ..addAll(retained);
+    if (_pendingManagedMediaEvents.isEmpty) {
+      _pendingManagedMediaEventsTimer?.cancel();
+      _pendingManagedMediaEventsTimer = null;
     }
   }
 
