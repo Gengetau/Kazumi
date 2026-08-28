@@ -76,7 +76,7 @@
             run: flutter pub get
             shell: bash
           - name: Run Flutter tests
-            run: flutter test
+            run: flutter test test/syncplay_room_page_test.dart --reporter expanded
             shell: bash
 
       flutter-analyze:
