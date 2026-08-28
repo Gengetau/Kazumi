@@ -1,4 +1,5 @@
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 
 final class SyncPlayInvite {
   const SyncPlayInvite({
@@ -105,7 +106,7 @@ final class SyncPlayInviteCodec {
             .firstMatch(text)
             ?.group(1)
             ?.trim();
-    final room = capture(r'(?:房间号?|room)\s*[：:]\s*([A-Za-z0-9._-]+)');
+    final room = capture(r'(?:房间号?|room)\s*[：:]\s*([+A-Za-z0-9._:-]+)');
     final server = capture(
       r'(?:服务器(?:地址)?|server|endpoint)\s*[：:]\s*([^\s，,]+)',
     );
@@ -136,8 +137,11 @@ final class SyncPlayInviteCodec {
     );
   }
 
-  static bool _validRoom(String room) =>
-      room.trim().isNotEmpty &&
-      room.length <= 128 &&
-      RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(room);
+  static bool _validRoom(String room) {
+    final value = room.trim();
+    return value.isNotEmpty &&
+        value.length <= 128 &&
+        (RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(value) ||
+            isSyncPlayManagedRoomName(value));
+  }
 }

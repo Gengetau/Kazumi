@@ -28,6 +28,7 @@ import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/services/player/timed_shutdown_service.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_room_notice.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
@@ -103,6 +104,7 @@ class _VideoPageState extends State<VideoPage>
     super.initState();
     _chatSurfaceToken = roomSession.registerChatSurface();
     playerController.resetSyncPlayChatEntryPrompt();
+    playerController.bindSyncPlayEpisodeChange(_changeEpisodeFromRoom);
     videoPageController.setPlaybackLaunchIntentValidator(
       _isPlaybackLaunchIntentCurrent,
     );
@@ -149,7 +151,8 @@ class _VideoPageState extends State<VideoPage>
       },
     );
     _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
-    _syncMediaSubscription = roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+    _syncMediaSubscription =
+        roomSession.mediaEvents.listen(_handleRoomMediaEvent);
   }
 
   bool _isPlaybackLaunchIntentCurrent() {
@@ -207,7 +210,7 @@ class _VideoPageState extends State<VideoPage>
           latest.episode != event.roomMedia.episode) {
         return;
       }
-      await changeEpisode(event.roomMedia.episode);
+      await _changeEpisodeFromRoom(event.roomMedia.episode);
     } else {
       await context.pushNamed('/syncplay-room/');
     }
@@ -294,7 +297,6 @@ class _VideoPageState extends State<VideoPage>
     } else {
       _initOnlineMode(playerController);
     }
-
   }
 
   void _initOfflineMode(PlayerController playerController) {
@@ -433,15 +435,15 @@ class _VideoPageState extends State<VideoPage>
         await showSyncPlaySheet(
           context,
           playerController: playerController,
-          changeEpisode: changeEpisode,
+          changeEpisode: _changeEpisodeFromRoom,
         );
       },
     );
     if (!mounted) return false;
     final session = playerController.syncplay;
-    final connecting = session.connectionState ==
-            SyncPlayConnectionState.connecting ||
-        session.connectionState == SyncPlayConnectionState.reconnecting;
+    final connecting =
+        session.connectionState == SyncPlayConnectionState.connecting ||
+            session.connectionState == SyncPlayConnectionState.reconnecting;
     return ready || session.isChatConnected || session.hasSession || connecting;
   }
 
@@ -458,7 +460,7 @@ class _VideoPageState extends State<VideoPage>
         await showSyncPlaySheet(
           context,
           playerController: playerController,
-          changeEpisode: changeEpisode,
+          changeEpisode: _changeEpisodeFromRoom,
         );
       },
     );
@@ -466,9 +468,9 @@ class _VideoPageState extends State<VideoPage>
       return;
     }
     final session = playerController.syncplay;
-    final connecting = session.connectionState ==
-            SyncPlayConnectionState.connecting ||
-        session.connectionState == SyncPlayConnectionState.reconnecting;
+    final connecting =
+        session.connectionState == SyncPlayConnectionState.connecting ||
+            session.connectionState == SyncPlayConnectionState.reconnecting;
     if (!ready &&
         !session.isChatConnected &&
         !session.hasSession &&
@@ -541,6 +543,58 @@ class _VideoPageState extends State<VideoPage>
 
   Future<void> changeEpisode(int episode,
       {int currentRoad = 0, int offset = 0}) async {
+    final currentEpisode = videoPageController.selectedEpisode.episode;
+    if (episode != currentEpisode) {
+      if (!roomSession.canControlLocalPlayback) {
+        KazumiDialog.showToast(message: '当前由主持人控制选集');
+        return;
+      }
+      final roomMedia = roomSession.currentMedia;
+      final localBangumiId = playerController.currentBangumiId;
+      final shouldSelectThroughRoom =
+          roomSession.connectionState == SyncPlayConnectionState.connected &&
+              roomSession.syncplayRoom.isNotEmpty &&
+              roomSession.playbackParticipation ==
+                  SyncPlayPlaybackParticipation.followingRoom &&
+              roomSession.canSelectRoomMedia &&
+              localBangumiId > 0 &&
+              (roomMedia == null || roomMedia.bangumiId == localBangumiId);
+      if (shouldSelectThroughRoom) {
+        final selected = await roomSession.selectRoomMedia(
+          bangumiId: localBangumiId,
+          episode: episode,
+          localRoad: currentRoad,
+        );
+        if (!selected && mounted) {
+          KazumiDialog.showToast(message: '切换房间选集失败，请重试');
+        }
+        return;
+      }
+    }
+    await _changeEpisodeInternal(
+      episode,
+      currentRoad: currentRoad,
+      offset: offset,
+    );
+  }
+
+  Future<void> _changeEpisodeFromRoom(
+    int episode, {
+    int currentRoad = 0,
+    int offset = 0,
+  }) {
+    return _changeEpisodeInternal(
+      episode,
+      currentRoad: currentRoad,
+      offset: offset,
+    );
+  }
+
+  Future<void> _changeEpisodeInternal(
+    int episode, {
+    int currentRoad = 0,
+    int offset = 0,
+  }) async {
     if (!mounted) {
       return;
     }
@@ -1041,8 +1095,7 @@ class _VideoPageState extends State<VideoPage>
                   keyboardFocus: keyboardFocus,
                   sendDanmaku: sendDanmaku,
                   openSyncPlayChat: openSyncPlayChat,
-                  ensureSyncPlayQuickChatReady:
-                      _ensureSyncPlayQuickChatReady,
+                  ensureSyncPlayQuickChatReady: _ensureSyncPlayQuickChatReady,
                   disableAnimations: disableAnimations,
                   pauseForTimedShutdown: pauseForTimedShutdown,
                 ),
@@ -1351,40 +1404,40 @@ class _VideoPageState extends State<VideoPage>
               children: [
                 Flexible(
                   child: TabBar(
-                  controller: tabController,
-                  dividerHeight: 0,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  labelPadding: EdgeInsetsDirectional.only(
-                    start: compactTabs ? 16 : 30,
-                    end: compactTabs ? 16 : 30,
-                  ),
-                  onTap: (index) {
-                    if (index == 0) {
-                      menuJumpToCurrentEpisode();
-                    }
-                  },
-                    tabs: [
-                    const Tab(text: '选集'),
-                    const Tab(text: '评论'),
-                    Observer(
-                      builder: (context) {
-                        final syncplay = playerController.syncplay;
-                        final unread = syncplay.unreadChatCount;
-                        final mentions = syncplay.unreadMentionCount;
-                        return Tab(
-                          child: Badge(
-                            isLabelVisible: unread > 0,
-                            label: Text(
-                              mentions > 0
-                                  ? '@${mentions > 99 ? '99+' : mentions}'
-                                  : (unread > 99 ? '99+' : '$unread'),
-                            ),
-                            child: const Text('聊天'),
-                          ),
-                        );
-                      },
+                    controller: tabController,
+                    dividerHeight: 0,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    labelPadding: EdgeInsetsDirectional.only(
+                      start: compactTabs ? 16 : 30,
+                      end: compactTabs ? 16 : 30,
                     ),
+                    onTap: (index) {
+                      if (index == 0) {
+                        menuJumpToCurrentEpisode();
+                      }
+                    },
+                    tabs: [
+                      const Tab(text: '选集'),
+                      const Tab(text: '评论'),
+                      Observer(
+                        builder: (context) {
+                          final syncplay = playerController.syncplay;
+                          final unread = syncplay.unreadChatCount;
+                          final mentions = syncplay.unreadMentionCount;
+                          return Tab(
+                            child: Badge(
+                              isLabelVisible: unread > 0,
+                              label: Text(
+                                mentions > 0
+                                    ? '@${mentions > 99 ? '99+' : mentions}'
+                                    : (unread > 99 ? '99+' : '$unread'),
+                              ),
+                              child: const Text('聊天'),
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),

@@ -42,14 +42,21 @@ final class PlayerSyncPlayBinding implements SyncPlayPlaybackBinding {
       player.seek(position, enableSync: false);
 
   @override
-  Future<void> changeEpisodeFromRoom(int episode) =>
-      player.changeEpisodeFromRoom(episode);
+  Future<void> changeEpisodeFromRoom(
+    int episode, {
+    int? preferredRoad,
+  }) =>
+      player.changeEpisodeFromRoom(
+        episode,
+        preferredRoad: preferredRoad,
+      );
 
   @override
   Future<void> publishCurrentMedia({
     bool? forcePlaying,
     double? forcePosition,
-  }) => player.setSyncPlayPlayingBangumi(
+  }) =>
+      player.setSyncPlayPlayingBangumi(
         forceSyncPlaying: forcePlaying,
         forceSyncPosition: forcePosition,
       );

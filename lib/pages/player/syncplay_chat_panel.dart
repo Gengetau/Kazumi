@@ -130,7 +130,10 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
       SyncPlayConnectionState.failed => '连接失败',
       SyncPlayConnectionState.disconnected => '未连接',
     };
-    final roomLabel = room.isEmpty ? status : '房间 $room';
+    final displayRoom = widget.controller.isManagedRoom
+        ? widget.controller.managedRoomBaseName ?? room
+        : room;
+    final roomLabel = room.isEmpty ? status : '房间 $displayRoom';
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, widget.compact ? 8 : 12, 12, 8),
@@ -146,6 +149,21 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+                if (widget.controller.isManagedRoom) ...[
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: widget.controller.isRoomOperator
+                        ? '房主控制：你是主持人'
+                        : '房主控制：由主持人操作共享播放',
+                    child: Icon(
+                      widget.controller.isRoomOperator
+                          ? Icons.workspace_premium_rounded
+                          : Icons.lock_person_rounded,
+                      size: 17,
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
@@ -229,17 +247,17 @@ class _SyncPlayChatHeaderState extends State<SyncPlayChatHeader> {
   @override
   Widget build(BuildContext context) {
     Widget observedHeader(BuildContext context) => Observer(
-      builder: (context) {
-        final controller = widget.controller;
-        return _buildHeader(
-          context,
-          room: controller.syncplayRoom,
-          rtt: controller.syncplayClientRtt,
-          state: controller.connectionState,
-          chatDanmakuEnabled: _chatDanmakuEnabled,
+          builder: (context) {
+            final controller = widget.controller;
+            return _buildHeader(
+              context,
+              room: controller.syncplayRoom,
+              rtt: controller.syncplayClientRtt,
+              state: controller.connectionState,
+              chatDanmakuEnabled: _chatDanmakuEnabled,
+            );
+          },
         );
-      },
-    );
 
     final chatDanmaku = widget.chatDanmakuController;
     if (chatDanmaku == null) return observedHeader(context);
@@ -353,8 +371,8 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
           final message = Text(
             noRoom ? '加入房间后开始聊天' : '暂无聊天消息',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
           );
           final onJoin = widget.onJoinRoom;
           if (!noRoom || onJoin == null) {
@@ -392,8 +410,7 @@ class _SyncPlayChatListState extends State<SyncPlayChatList> {
                   maxBubbleWidth: widget.maxBubbleWidth,
                   grouped: grouped,
                   showSender: !grouped,
-                  showTime:
-                      index == messages.length - 1 ||
+                  showTime: index == messages.length - 1 ||
                       !message.canGroupWith(messages[index + 1]),
                   onReply: widget.onReply,
                 );
@@ -571,8 +588,8 @@ class SyncPlayChatTile extends StatelessWidget {
         message.message,
         contextMenuBuilder: (context, state) =>
             _buildSelectionMenu(context, state),
-        style: Theme.of(context).textTheme.bodyMedium
-            ?.copyWith(color: textColor),
+        style:
+            Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor),
       );
     }
     final spans = <TextSpan>[];
@@ -602,8 +619,8 @@ class SyncPlayChatTile extends StatelessWidget {
     }
     return SelectableText.rich(
       TextSpan(
-        style: Theme.of(context).textTheme.bodyMedium
-            ?.copyWith(color: textColor),
+        style:
+            Theme.of(context).textTheme.bodyMedium?.copyWith(color: textColor),
         children: spans,
       ),
       contextMenuBuilder: (context, state) =>
@@ -706,9 +723,8 @@ class SyncPlayChatTile extends StatelessWidget {
         );
         final tile = Row(
           mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: remote
-              ? MainAxisAlignment.start
-              : MainAxisAlignment.end,
+          mainAxisAlignment:
+              remote ? MainAxisAlignment.start : MainAxisAlignment.end,
           children: remote
               ? [if (showSender) _buildAvatar(context), bubble]
               : [bubble, if (showSender) _buildAvatar(context)],
@@ -725,9 +741,8 @@ class SyncPlayChatTile extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.fromLTRB(12, grouped ? 1 : 4, 12, 4),
               child: Align(
-                alignment: remote
-                    ? Alignment.centerLeft
-                    : Alignment.centerRight,
+                alignment:
+                    remote ? Alignment.centerLeft : Alignment.centerRight,
                 child: tile,
               ),
             ),
@@ -832,9 +847,8 @@ class SyncPlayChatComposerState extends State<SyncPlayChatComposer> {
       minLines: 1,
       maxLines: 3,
       maxLength: controller.chatMessageLengthLimit,
-      textInputAction: isDesktop()
-          ? TextInputAction.newline
-          : TextInputAction.send,
+      textInputAction:
+          isDesktop() ? TextInputAction.newline : TextInputAction.send,
       onSubmitted: (_) {
         if (!isDesktop()) {
           unawaited(_send());

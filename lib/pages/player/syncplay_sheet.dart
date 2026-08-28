@@ -11,6 +11,7 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -25,36 +26,49 @@ Future<void> showSyncPlaySheet(
   BuildContext context, {
   required PlayerController playerController,
   required Future<void> Function(int episode, {int currentRoad, int offset})
-  changeEpisode,
+      changeEpisode,
 }) async {
   final _SyncPlayDestination? destination =
       await _showStep<_SyncPlayDestination>(
-        context,
-        (context) => _SyncPlayHomeSheet(playerController: playerController),
-      );
+    context,
+    (context) => _SyncPlayHomeSheet(playerController: playerController),
+  );
   if (destination == null || !context.mounted) {
     return;
   }
   await _showStep<void>(
     context,
     (context) => switch (destination) {
-      _SyncPlayDestination.create || _SyncPlayDestination.join =>
+      _SyncPlayDestination.create ||
+      _SyncPlayDestination.join =>
         destination == _SyncPlayDestination.create
             ? SyncPlayCreateRoomForm(
-                onSubmit: (room, username) => playerController
-                    .createSyncPlayRoom(room, username, changeEpisode),
+                onSubmit: (room, username, mode) async {
+                  if (mode == SyncPlayRoomControlMode.managed) {
+                    await playerController.createManagedSyncPlayRoom(
+                      room,
+                      username,
+                      changeEpisode,
+                    );
+                    return;
+                  }
+                  await playerController.createSyncPlayRoom(
+                    room,
+                    username,
+                    changeEpisode,
+                  );
+                },
               )
             : SyncPlayJoinRoomForm(
                 onSubmit: (room, username) => playerController
                     .createSyncPlayRoom(room, username, changeEpisode),
               ),
       _SyncPlayDestination.server => SyncPlayServerForm(
-        onSaved:
-            playerController.syncplay.connectionState ==
-                SyncPlayConnectionState.failed
-            ? playerController.syncplay.retryConnection
-            : null,
-      ),
+          onSaved: playerController.syncplay.connectionState ==
+                  SyncPlayConnectionState.failed
+              ? playerController.syncplay.retryConnection
+              : null,
+        ),
     },
   );
 }
@@ -152,14 +166,13 @@ class _SyncPlaySheetScaffold extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style:
-                            (compact
-                                    ? theme.textTheme.titleLarge
-                                    : theme.textTheme.headlineSmall)
-                                ?.copyWith(
-                                  color: colorScheme.onSurface,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                        style: (compact
+                                ? theme.textTheme.titleLarge
+                                : theme.textTheme.headlineSmall)
+                            ?.copyWith(
+                          color: colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       if (showDescription) ...[
                         const SizedBox(height: 4),
@@ -246,8 +259,7 @@ class SyncPlayRoomHome extends StatelessWidget {
   final VoidCallback? onRetry;
   final String Function()? inviteTextBuilder;
   final bool enableClipboardJoin;
-  final Future<void> Function(SyncPlayInvite invite)?
-      onClipboardInviteAccepted;
+  final Future<void> Function(SyncPlayInvite invite)? onClipboardInviteAccepted;
 
   Future<void> _joinFromClipboard(BuildContext context) async {
     final service = inject<SyncPlayClipboardInviteService>();
@@ -281,8 +293,7 @@ class SyncPlayRoomHome extends StatelessWidget {
     }
     var confirmUnknown = false;
     if (service.candidateNeedsServerConfirmation) {
-      confirmUnknown =
-          await showDialog<bool>(
+      confirmUnknown = await showDialog<bool>(
             context: context,
             builder: (dialogContext) => AlertDialog(
               title: const Text('确认自定义服务器'),
@@ -325,8 +336,7 @@ class SyncPlayRoomHome extends StatelessWidget {
         final state = controller.connectionState;
         final connected =
             state == SyncPlayConnectionState.connected && room.isNotEmpty;
-        final connecting =
-            state == SyncPlayConnectionState.connecting ||
+        final connecting = state == SyncPlayConnectionState.connecting ||
             state == SyncPlayConnectionState.reconnecting ||
             (hasSession && !connected);
 
@@ -643,8 +653,7 @@ class _SyncPlayHomeSheet extends StatelessWidget {
       builder: (context) {
         final hasSession = playerController.syncplay.hasSession;
         final state = playerController.syncplay.connectionState;
-        final connecting =
-            state == SyncPlayConnectionState.connecting ||
+        final connecting = state == SyncPlayConnectionState.connecting ||
             state == SyncPlayConnectionState.reconnecting ||
             (hasSession && playerController.syncplay.syncplayRoom.isEmpty);
         return _SyncPlaySheetScaffold(
@@ -757,20 +766,32 @@ class _ChoiceCard extends StatelessWidget {
 /// usable by both the legacy player sheet and the persistent RoomPage without
 /// introducing a second room/session implementation.
 abstract class SyncPlayRoomForm extends StatefulWidget {
-  const SyncPlayRoomForm({super.key, required this.onSubmit});
-
-  final Future<void> Function(String room, String username) onSubmit;
+  const SyncPlayRoomForm({super.key});
 }
 
 class SyncPlayCreateRoomForm extends SyncPlayRoomForm {
-  const SyncPlayCreateRoomForm({super.key, required super.onSubmit});
+  const SyncPlayCreateRoomForm({
+    super.key,
+    required this.onSubmit,
+  });
+
+  final Future<void> Function(
+    String room,
+    String username,
+    SyncPlayRoomControlMode mode,
+  ) onSubmit;
 
   @override
   State<SyncPlayRoomForm> createState() => _SyncPlayRoomFormState();
 }
 
 class SyncPlayJoinRoomForm extends SyncPlayRoomForm {
-  const SyncPlayJoinRoomForm({super.key, required super.onSubmit});
+  const SyncPlayJoinRoomForm({
+    super.key,
+    required this.onSubmit,
+  });
+
+  final Future<void> Function(String room, String username) onSubmit;
 
   @override
   State<SyncPlayRoomForm> createState() => _SyncPlayRoomFormState();
@@ -804,6 +825,7 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
   final TextEditingController _usernameController = TextEditingController();
 
   late String _createdRoom = _generateRoomNumber();
+  SyncPlayRoomControlMode _controlMode = SyncPlayRoomControlMode.free;
 
   @override
   void initState() {
@@ -840,7 +862,11 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
     // Close first so the connection toasts land on the page underneath rather
     // than behind this sheet.
     Navigator.of(context).pop();
-    unawaited(widget.onSubmit(room, username));
+    if (widget case SyncPlayCreateRoomForm createForm) {
+      unawaited(createForm.onSubmit(room, username, _controlMode));
+    } else if (widget case SyncPlayJoinRoomForm joinForm) {
+      unawaited(joinForm.onSubmit(room, username));
+    }
   }
 
   @override
@@ -879,12 +905,21 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
         return Form(
           key: _formKey,
           child: compact
-              ? Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(child: lead),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildUsernameField(compact: true)),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: lead),
+                        const SizedBox(width: 12),
+                        Expanded(child: _buildUsernameField(compact: true)),
+                      ],
+                    ),
+                    if (isCreate) ...[
+                      const SizedBox(height: 12),
+                      _buildControlModePicker(compact: true),
+                    ],
                   ],
                 )
               : Column(
@@ -893,6 +928,10 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
                     lead,
                     const SizedBox(height: 16),
                     _buildUsernameField(),
+                    if (isCreate) ...[
+                      const SizedBox(height: 16),
+                      _buildControlModePicker(),
+                    ],
                   ],
                 ),
         );
@@ -900,17 +939,88 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
     );
   }
 
+  Widget _buildControlModePicker({bool compact = false}) {
+    if (compact) {
+      return SegmentedButton<SyncPlayRoomControlMode>(
+        segments: const [
+          ButtonSegment(
+            value: SyncPlayRoomControlMode.free,
+            icon: Icon(Icons.group_rounded),
+            label: Text('自由控制'),
+          ),
+          ButtonSegment(
+            value: SyncPlayRoomControlMode.managed,
+            icon: Icon(Icons.lock_person_rounded),
+            label: Text('房主控制'),
+          ),
+        ],
+        selected: {_controlMode},
+        onSelectionChanged: (selection) {
+          setState(() => _controlMode = selection.first);
+        },
+      );
+    }
+
+    final theme = Theme.of(context);
+    return Card(
+      margin: EdgeInsets.zero,
+      color: theme.colorScheme.surfaceContainerHigh,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
+              child: Text(
+                '控制模式',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            RadioGroup<SyncPlayRoomControlMode>(
+              groupValue: _controlMode,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _controlMode = value);
+                }
+              },
+              child: const Column(
+                children: [
+                  RadioListTile<SyncPlayRoomControlMode>(
+                    value: SyncPlayRoomControlMode.free,
+                    title: Text('自由控制'),
+                    subtitle: Text('所有成员均可控制播放、进度与选集'),
+                  ),
+                  RadioListTile<SyncPlayRoomControlMode>(
+                    value: SyncPlayRoomControlMode.managed,
+                    title: Text('房主控制'),
+                    subtitle: Text('只有主持人可以修改共享播放状态'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildRoomField() {
     return TextFormField(
       controller: _roomController,
       autofocus: true,
-      keyboardType: TextInputType.number,
+      keyboardType: TextInputType.text,
       textInputAction: TextInputAction.next,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9+_:\-]')),
+        LengthLimitingTextInputFormatter(96),
+      ],
       autovalidateMode: AutovalidateMode.onUserInteraction,
       decoration: _sheetInputDecoration(
         labelText: '房间号',
-        hintText: '6-10 位数字',
+        hintText: '房间号或房主控制房间名',
         icon: Icons.meeting_room_outlined,
       ),
       validator: (value) {
@@ -918,8 +1028,9 @@ class _SyncPlayRoomFormState extends State<SyncPlayRoomForm> {
         if (text.isEmpty) {
           return '请输入房间号';
         }
-        if (!RegExp(r'^[0-9]{6,10}$').hasMatch(text)) {
-          return '房间号为 6-10 位数字';
+        if (!RegExp(r'^[0-9]{6,10}$').hasMatch(text) &&
+            !isSyncPlayManagedRoomName(text)) {
+          return '请输入 6-10 位房间号或有效的房主控制房间名';
         }
         return null;
       },

@@ -116,6 +116,47 @@ void main() {
     await _dispose(controller, [client]);
   });
 
+  test('retrying managed room creation never downgrades to a free room',
+      () async {
+    final firstClient = FakeSyncplayClient();
+    final retryClient = FakeSyncplayClient(serverFeatures: _features);
+    final controller = _controllerFor([firstClient, retryClient]);
+
+    expect(await controller.createManagedRoom('room-a', 'alice'), isFalse);
+    expect(controller.connectionState, SyncPlayConnectionState.failed);
+
+    final retry = controller.retryConnection();
+    await _settleUntil(() => retryClient.controllerAuthRequests.length == 1);
+    final password = retryClient.controllerAuthRequests.first.password;
+    retryClient.emitControlledRoomCreated(
+      roomName: _managedRoom,
+      password: password,
+    );
+    await _settleUntil(() => retryClient.controllerAuthRequests.length == 2);
+    retryClient.emitControllerAuth(
+      username: 'server-alice',
+      room: _managedRoom,
+      success: true,
+    );
+    await _settleUntil(() => retryClient.userListRequests == 1);
+    retryClient.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
+    await retry;
+
+    expect(controller.connectionState, SyncPlayConnectionState.connected);
+    expect(controller.roomControlMode, SyncPlayRoomControlMode.managed);
+    expect(controller.syncplayRoom, _managedRoom);
+    expect(controller.isRoomOperator, isTrue);
+    expect(retryClient.controllerAuthRequests, hasLength(2));
+
+    await _dispose(controller, [firstClient, retryClient]);
+  });
+
   test('joins a managed room as a normal member', () async {
     final client = FakeSyncplayClient(
       acceptedRoom: _managedRoom,
@@ -210,6 +251,198 @@ void main() {
     expect(controller.hasActiveOperator, isFalse);
     expect(controller.isRoomOperator, isFalse);
     expect(controller.canControlPlayback, isFalse);
+
+    await _dispose(controller, [client]);
+  });
+
+  test('accepts managed room media only from confirmed operators', () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _features,
+    );
+    final controller = _controllerFor([client]);
+    await _joinManagedRoomAsMember(controller, client);
+
+    client.emitFileChanged(
+      name: '12345[2]',
+      setBy: 'server-alice',
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.currentMedia, isNull);
+
+    client.emitFileChanged(name: '12345[3]', setBy: 'host');
+    await _settleUntil(() => controller.currentMedia != null);
+
+    expect(controller.currentMedia?.bangumiId, 12345);
+    expect(controller.currentMedia?.episode, 3);
+    expect(controller.currentMedia?.selectedBy, 'host');
+
+    await _dispose(controller, [client]);
+  });
+
+  test('queues managed media until the sender role is confirmed', () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _features,
+    );
+    final controller = _controllerFor([client]);
+    await _joinManagedRoomAsMember(controller, client);
+
+    client.emitFileChanged(name: '67890[4]', setBy: 'new-host');
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.currentMedia, isNull);
+
+    client.emitControllerAuth(
+      username: 'other-host',
+      room: _managedRoom,
+      success: true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.currentMedia, isNull);
+
+    client.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: false,
+      ),
+      SyncplayRoomUser(
+        username: 'host',
+        room: _managedRoom,
+        isController: true,
+      ),
+      SyncplayRoomUser(
+        username: 'other-host',
+        room: _managedRoom,
+        isController: true,
+      ),
+      SyncplayRoomUser(
+        username: 'new-host',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
+    await _settleUntil(() => controller.currentMedia != null);
+
+    expect(controller.roomUsers['new-host']?.isController, isTrue);
+    expect(controller.currentMedia?.bangumiId, 67890);
+    expect(controller.currentMedia?.episode, 4);
+
+    await _dispose(controller, [client]);
+  });
+
+  test('managed followers cannot publish playback or room media', () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _features,
+    );
+    final controller = _controllerFor([client]);
+    await _joinManagedRoomAsMember(controller, client);
+    client.emitFileChanged(name: '12345[3]', setBy: 'host');
+    await _settleUntil(() => controller.currentMedia != null);
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 3,
+      playing: false,
+    );
+    controller.attachPlayback(binding);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      controller.playbackParticipation,
+      SyncPlayPlaybackParticipation.followingRoom,
+    );
+    expect(controller.canControlLocalPlayback, isFalse);
+    expect(controller.canChangePlaybackSpeed, isFalse);
+    expect(controller.shouldBroadcastLocalPlayback, isFalse);
+
+    await controller.requestSync(doSeek: true);
+    final selected = await controller.selectRoomMedia(
+      bangumiId: 12345,
+      episode: 4,
+    );
+
+    expect(client.syncRequests, isEmpty);
+    expect(client.setPlayingNames, isEmpty);
+    expect(selected, isFalse);
+
+    await _dispose(controller, [client]);
+  });
+
+  test('local-only managed playback remains local for operators', () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _features,
+    );
+    final controller = _controllerFor([client]);
+    await _joinManagedRoomAsMember(controller, client);
+
+    final authentication = controller.authenticateAsOperator('AB-123-456');
+    await _settleUntil(() => client.controllerAuthRequests.length == 1);
+    client.emitControllerAuth(
+      username: 'server-alice',
+      room: _managedRoom,
+      success: true,
+    );
+    await _settleUntil(() => client.userListRequests == 2);
+    client.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
+    expect(await authentication, isTrue);
+
+    client.emitFileChanged(name: '12345[3]', setBy: 'server-alice');
+    await _settleUntil(() => controller.currentMedia != null);
+    controller.attachPlayback(
+      FakePlaybackBinding(bangumiId: 67890, currentEpisode: 1),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      controller.playbackParticipation,
+      SyncPlayPlaybackParticipation.localOnly,
+    );
+    expect(controller.canControlLocalPlayback, isTrue);
+    expect(controller.canChangePlaybackSpeed, isTrue);
+    expect(controller.shouldBroadcastLocalPlayback, isFalse);
+
+    await controller.requestSync(doSeek: true);
+    expect(client.syncRequests, isEmpty);
+
+    await _dispose(controller, [client]);
+  });
+
+  test('managed room invitations never expose the operator password', () async {
+    final client = FakeSyncplayClient(
+      acceptedRoom: _managedRoom,
+      serverFeatures: _features,
+    );
+    final controller = _controllerFor([client]);
+    await _joinManagedRoomAsMember(controller, client);
+
+    final authentication = controller.authenticateAsOperator('AB-123-456');
+    await _settleUntil(() => client.controllerAuthRequests.length == 1);
+    client.emitControllerAuth(
+      username: 'server-alice',
+      room: _managedRoom,
+      success: true,
+    );
+    await _settleUntil(() => client.userListRequests == 2);
+    client.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
+    expect(await authentication, isTrue);
+
+    final invite = controller.syncPlayInviteText();
+    expect(invite, contains(_managedRoom));
+    expect(invite, isNot(contains('AB-123-456')));
 
     await _dispose(controller, [client]);
   });
