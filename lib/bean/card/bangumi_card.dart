@@ -10,11 +10,13 @@ class BangumiCardV extends StatelessWidget {
   const BangumiCardV({
     super.key,
     required this.bangumiItem,
+    this.onTap,
     this.canTap = true,
     this.enableHero = true,
   });
 
   final BangumiItem bangumiItem;
+  final ValueChanged<BangumiItem>? onTap;
   final bool canTap;
   final bool enableHero;
 
@@ -31,6 +33,10 @@ class BangumiCardV extends StatelessWidget {
               KazumiDialog.showToast(
                 message: '编辑模式',
               );
+              return;
+            }
+            if (onTap != null) {
+              onTap!(bangumiItem);
               return;
             }
             context.pushNamed('/info/', arguments: bangumiItem);

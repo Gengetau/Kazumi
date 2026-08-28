@@ -1,22 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 
-PlayerSyncPlayController _controller({bool connected = false}) {
-  final controller = PlayerSyncPlayController(
-    bangumiId: () => 1,
-    currentEpisode: () => 1,
-    currentRoad: () => 0,
-    playing: () => false,
-    currentPosition: () => Duration.zero,
-    playerPosition: () => Duration.zero,
-    duration: () => const Duration(minutes: 20),
-    pause: ({bool enableSync = true}) async {},
-    play: ({bool enableSync = true}) async {},
-    seek: (duration, {bool enableSync = true}) async {},
-  );
+SyncPlayRoomSessionController _controller({bool connected = false}) {
+  final controller = SyncPlayRoomSessionController();
   if (connected) {
     controller.syncplayController = SyncplayClient(host: 'localhost', port: 1);
     controller.syncplayRoom = '123456';
@@ -32,7 +21,7 @@ Widget _app(Widget child) {
 
 Future<void> _disposePanel(
   WidgetTester tester,
-  PlayerSyncPlayController controller,
+  SyncPlayRoomSessionController controller,
 ) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await controller.dispose();

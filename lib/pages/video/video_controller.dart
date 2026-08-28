@@ -129,6 +129,28 @@ abstract class _VideoPageController with Store implements Disposable {
   final Map<int, int> _offlineDisplayRoadToOriginalRoad = {};
   final Map<int, int> _offlineOriginalRoadToDisplayRoad = {};
 
+  SyncPlayPlaybackLaunchIntent? _playbackLaunchIntent;
+  bool _launchIntentPending = false;
+  bool Function()? _playbackLaunchIntentValidator;
+
+  SyncPlayPlaybackLaunchIntent? get playbackLaunchIntent =>
+      _playbackLaunchIntent;
+
+  /// Supplies the app-scoped room check used while a route resolves its
+  /// source.  The callback is installed by VideoPage before it starts any
+  /// asynchronous playback work.
+  void setPlaybackLaunchIntentValidator(bool Function()? validator) {
+    _playbackLaunchIntentValidator = validator;
+  }
+
+  bool get playbackLaunchIntentIsCurrent {
+    if (!_launchIntentPending) {
+      return true;
+    }
+    final validator = _playbackLaunchIntentValidator;
+    return validator == null || validator();
+  }
+
   /// Title reported by the video source; may differ from [bangumiItem]'s.
   String title = '';
 
@@ -157,6 +179,8 @@ abstract class _VideoPageController with Store implements Disposable {
   /// Applies the route arguments exactly once, from [VideoPage.initState].
   @action
   void applyPlaybackArgs(VideoPlaybackArgs args) {
+    _playbackLaunchIntent = args.launchIntent;
+    _launchIntentPending = args.launchIntent != null;
     switch (args) {
       case OnlineVideoPlaybackArgs():
         bangumiItem = args.bangumiItem;
@@ -165,6 +189,7 @@ abstract class _VideoPageController with Store implements Disposable {
         src = args.src;
         roadList.clear();
         roadList.addAll(args.roads);
+        _applyLaunchEpisode(args.launchIntent);
       case OfflineVideoPlaybackArgs():
         _initForOfflinePlayback(
           bangumiItem: args.bangumiItem,
@@ -174,6 +199,30 @@ abstract class _VideoPageController with Store implements Disposable {
           downloadedEpisodes: args.downloadedEpisodes,
         );
     }
+  }
+
+  void _applyLaunchEpisode(SyncPlayPlaybackLaunchIntent? intent) {
+    if (intent == null ||
+        !intent.isValid ||
+        intent.expectedBangumiId != bangumiItem.id ||
+        intent.expectedEpisode <= 0) {
+      return;
+    }
+    final road = _roadForEpisode(intent.expectedEpisode);
+    if (road == null) {
+      return;
+    }
+    resetEpisodeState(episode: intent.expectedEpisode, road: road);
+  }
+
+  int? _roadForEpisode(int episode) {
+    for (var index = 0; index < roadList.length; index++) {
+      if (episode <= roadList[index].data.length &&
+          episode <= roadList[index].identifier.length) {
+        return index;
+      }
+    }
+    return null;
   }
 
   @action
@@ -422,6 +471,10 @@ abstract class _VideoPageController with Store implements Disposable {
     int offset = 0,
     required PlayerController playerController,
   }) async {
+    if (!playbackLaunchIntentIsCurrent) {
+      _failLoading('房间媒体已更新，请返回聊天室后重试');
+      return;
+    }
     final session = _playbackSessions.begin();
     final selection = VideoEpisodeSelection(
       episode: episode,
@@ -433,7 +486,7 @@ abstract class _VideoPageController with Store implements Disposable {
     _videoSourceService?.cancel();
 
     await playerController.stop();
-    if (session.isStale) {
+    if (session.isStale || !playbackLaunchIntentIsCurrent) {
       return;
     }
 
@@ -530,8 +583,18 @@ abstract class _VideoPageController with Store implements Disposable {
           bangumiItem.nameCn.isNotEmpty ? bangumiItem.nameCn : bangumiItem.name,
     );
 
+    if (!playbackLaunchIntentIsCurrent) {
+      _playbackSessions.cancel();
+      return;
+    }
     final initialized = await playerController.init(params);
+    if (session.isActive && initialized && !playbackLaunchIntentIsCurrent) {
+      playerController.beginShutdown();
+      _playbackSessions.cancel();
+      return;
+    }
     if (session.isActive && initialized) {
+      _launchIntentPending = false;
       playingEpisode = selection;
       unawaited(_loadPlaybackDanmaku(playerController, params, session));
     } else if (session.isActive) {
@@ -613,6 +676,10 @@ abstract class _VideoPageController with Store implements Disposable {
       if (session.isStale) {
         return;
       }
+      if (!playbackLaunchIntentIsCurrent) {
+        _playbackSessions.cancel();
+        return;
+      }
       _finishLoading();
       KazumiLogger()
           .i('VideoPageController: resolved video URL: ${source.url}');
@@ -649,7 +716,13 @@ abstract class _VideoPageController with Store implements Disposable {
       );
 
       final initialized = await playerController.init(params);
+      if (session.isActive && initialized && !playbackLaunchIntentIsCurrent) {
+        playerController.beginShutdown();
+        _playbackSessions.cancel();
+        return;
+      }
       if (session.isActive && initialized) {
+        _launchIntentPending = false;
         playingEpisode = VideoEpisodeSelection(
           episode: resolvedEpisode.listIndex,
           road: resolvedEpisode.roadIndex,

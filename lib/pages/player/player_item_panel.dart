@@ -11,6 +11,8 @@ import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/pages/player/player_panel_hold.dart';
 import 'package:kazumi/pages/player/syncplay_chat_entry.dart';
+import 'package:kazumi/pages/player/syncplay_quick_chat_composer.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/pages/video/video_controller.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
@@ -47,13 +49,13 @@ class PlayerItemPanel extends StatefulWidget {
     required this.keyboardFocus,
     required this.sendDanmaku,
     required this.openSyncPlayChat,
+    required this.ensureSyncPlayQuickChatReady,
     required this.acquirePlayerPanelHold,
     required this.onMenuVisibilityChanged,
     required this.handleDanmaku,
     required this.skipOP,
     required this.showVideoInfo,
     required this.showSyncPlayPanel,
-    required this.showDanmakuDestinationPickerAndSend,
     required this.pauseForTimedShutdown,
     this.disableAnimations = false,
   });
@@ -81,9 +83,9 @@ class PlayerItemPanel extends StatefulWidget {
   final void Function() skipOP;
   final bool Function(String) sendDanmaku;
   final VoidCallback openSyncPlayChat;
+  final Future<bool> Function() ensureSyncPlayQuickChatReady;
   final void Function() showVideoInfo;
   final void Function() showSyncPlayPanel;
-  final Future<bool> Function(String) showDanmakuDestinationPickerAndSend;
   final VoidCallback pauseForTimedShutdown;
   final bool disableAnimations;
 
@@ -131,11 +133,11 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
     _danmakuTextFieldHold = null;
   }
 
-  Future<void> _submitDanmakuText(String message) async {
+  void _submitDanmakuText(String message) {
     textFieldFocus.unfocus();
     _releaseDanmakuTextFieldPanel();
 
-    final sent = await widget.showDanmakuDestinationPickerAndSend(message);
+    final sent = widget.sendDanmaku(message);
     if (!mounted) {
       return;
     }
@@ -180,7 +182,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
               children: [
                 TextButton(
                   onPressed: () {
-                    unawaited(_submitDanmakuText(textController.text));
+                    _submitDanmakuText(textController.text);
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: playerController.danmaku.danmakuOn
@@ -203,7 +205,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
             _holdDanmakuTextFieldPanel();
           },
           onSubmitted: (msg) {
-            unawaited(_submitDanmakuText(msg));
+            _submitDanmakuText(msg);
           },
           onTapOutside: (_) {
             _releaseDanmakuTextFieldPanel();
@@ -657,6 +659,8 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Observer(builder: (context) {
+                final canControl =
+                    playerController.syncplay.canControlLocalPlayback;
                 return ProgressBar(
                   thumbRadius: 8,
                   thumbGlowRadius: 18,
@@ -673,10 +677,14 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                   progress: playerController.playback.currentPosition,
                   buffered: playerController.playback.buffer,
                   total: playerController.playback.duration,
-                  onSeek: widget.handleProgressBarSeek,
-                  onDragStart: (_) => widget.handleProgressBarDragStart(),
-                  onDragUpdate: (details) => playerController.seeking
-                      .updateInteractiveSeek(details.timeStamp),
+                  onSeek: canControl ? widget.handleProgressBarSeek : null,
+                  onDragStart: canControl
+                      ? (_) => widget.handleProgressBarDragStart()
+                      : null,
+                  onDragUpdate: canControl
+                      ? (details) => playerController.seeking
+                          .updateInteractiveSeek(details.timeStamp)
+                      : null,
                 );
               }),
             ),
@@ -685,13 +693,35 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: playerController.playback.playing ? '暂停' : '播放',
-                    onPressed: () => playerController.playOrPause(),
+                    tooltip: playerController.syncplay.canControlLocalPlayback
+                        ? (playerController.playback.playing ? '暂停' : '播放')
+                        : '当前由主持人控制播放',
+                    onPressed: playerController.syncplay.canControlLocalPlayback
+                        ? () => playerController.playOrPause()
+                        : null,
                     icon: PlayPauseIcon(
                       iconColor: Colors.white,
                       playing: playerController.playback.playing,
                     ),
                   ),
+                  if (playerController.syncplay.isManagedRoom &&
+                      playerController.syncplay.playbackParticipation ==
+                          SyncPlayPlaybackParticipation.followingRoom)
+                    Tooltip(
+                      message: playerController.syncplay.isRoomOperator
+                          ? '房主控制：你是主持人'
+                          : '房主控制：等待主持人操作',
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          playerController.syncplay.isRoomOperator
+                              ? Icons.workspace_premium_rounded
+                              : Icons.lock_person_rounded,
+                          color: Colors.white70,
+                          size: 20,
+                        ),
+                      ),
+                    ),
                   if (videoPageController.isFullscreen ||
                       isTablet() ||
                       isDesktop())
@@ -699,7 +729,10 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                       color: Colors.white,
                       icon: const Icon(Icons.skip_next_rounded),
                       tooltip: '下一集',
-                      onPressed: () => widget.handlePreNextEpisode('next'),
+                      onPressed:
+                          playerController.syncplay.canControlLocalPlayback
+                              ? () => widget.handlePreNextEpisode('next')
+                              : null,
                     ),
                   if (isDesktop())
                     Container(
@@ -836,13 +869,16 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                     builder: (BuildContext context, MenuController controller,
                         Widget? child) {
                       return TextButton(
-                        onPressed: () {
-                          if (controller.isOpen) {
-                            controller.close();
-                          } else {
-                            controller.open();
-                          }
-                        },
+                        onPressed:
+                            playerController.syncplay.canChangePlaybackSpeed
+                                ? () {
+                                    if (controller.isOpen) {
+                                      controller.close();
+                                    } else {
+                                      controller.open();
+                                    }
+                                  }
+                                : null,
                         child: Text(
                           playerController.playback.playerSpeed == 1.0
                               ? '倍速'
@@ -855,9 +891,12 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                       for (final double i
                           in defaultPlaySpeedList) ...<MenuItemButton>[
                         MenuItemButton(
-                          onPressed: () async {
-                            await widget.setPlaybackSpeed(i);
-                          },
+                          onPressed:
+                              playerController.syncplay.canChangePlaybackSpeed
+                                  ? () async {
+                                      await widget.setPlaybackSpeed(i);
+                                    }
+                                  : null,
                           child: Container(
                             height: 48,
                             constraints: BoxConstraints(minWidth: 112),
@@ -1032,6 +1071,16 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                   controller: playerController.syncplay,
                   onPressed: widget.openSyncPlayChat,
                 ),
+              SyncPlayQuickChatComposer(
+                compact: !isDesktop(),
+                ensureReady: widget.ensureSyncPlayQuickChatReady,
+                onSend: playerController.trySendSyncPlayChatMessage,
+                acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
+                restoreFocus: widget.keyboardFocus,
+                onOpen: () {
+                  if (videoPageController.showTabBody) widget.toggleMenu();
+                },
+              ),
               PlayerPanelHoldMenuAnchor(
                 acquirePlayerPanelHold: widget.acquirePlayerPanelHold,
                 onVisibilityChanged: widget.onMenuVisibilityChanged,
