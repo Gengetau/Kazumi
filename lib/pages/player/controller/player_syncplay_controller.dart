@@ -33,11 +33,13 @@ final class _PendingRoomMediaSelection {
     required this.token,
     required this.bangumiId,
     required this.episode,
+    this.localRoad,
   });
 
   final int token;
   final int bangumiId;
   final int episode;
+  final int? localRoad;
   final Completer<bool> completer = Completer<bool>();
   Timer? timeout;
 }
@@ -1737,9 +1739,11 @@ abstract class _PlayerSyncPlayController with Store {
     );
     currentMedia = media;
     final pendingSelection = _pendingMediaSelection;
+    int? preferredLocalRoad;
     if (pendingSelection != null) {
       if (pendingSelection.bangumiId == media.bangumiId &&
           pendingSelection.episode == media.episode) {
+        preferredLocalRoad = pendingSelection.localRoad;
         _completeMediaSelection(pendingSelection, true);
       } else {
         _failMediaSelection(pendingSelection, '房间媒体已被其他选择覆盖');
@@ -1772,20 +1776,30 @@ abstract class _PlayerSyncPlayController with Store {
       generation: _playbackBindingGeneration,
       binding: binding,
     );
-    unawaited(_applyRemoteMediaChange(attachment, media));
+    unawaited(
+      _applyRemoteMediaChange(
+        attachment,
+        media,
+        preferredRoad: preferredLocalRoad,
+      ),
+    );
   }
 
   Future<void> _applyRemoteMediaChange(
     SyncPlayPlaybackAttachment attachment,
-    SyncPlayRoomMedia media,
-  ) async {
+    SyncPlayRoomMedia media, {
+    int? preferredRoad,
+  }) async {
     if (!_isCurrentPlayback(attachment) ||
         attachment.binding.bangumiId != media.bangumiId ||
         attachment.binding.currentEpisode == media.episode) {
       return;
     }
     try {
-      await attachment.binding.changeEpisodeFromRoom(media.episode);
+      await attachment.binding.changeEpisodeFromRoom(
+        media.episode,
+        preferredRoad: preferredRoad,
+      );
       // The route may have detached or been replaced while episode loading
       // was in flight.  Do not let a completed stale callback continue into
       // any follow-up room state application.
@@ -1866,12 +1880,16 @@ abstract class _PlayerSyncPlayController with Store {
   Future<bool> selectRoomMedia({
     required int bangumiId,
     required int episode,
+    int? localRoad,
   }) async {
     // A later request must invalidate an earlier wait even when its own
     // arguments are invalid. Otherwise the old operation could eventually
     // affect the newer request.
     _cancelMediaSelection();
-    if (bangumiId <= 0 || episode <= 0 || !canSelectRoomMedia) {
+    if (bangumiId <= 0 ||
+        episode <= 0 ||
+        (localRoad != null && localRoad < 0) ||
+        !canSelectRoomMedia) {
       return false;
     }
 
@@ -1887,6 +1905,7 @@ abstract class _PlayerSyncPlayController with Store {
       token: ++_mediaSelectionToken,
       bangumiId: bangumiId,
       episode: episode,
+      localRoad: localRoad,
     );
     _pendingMediaSelection = selection;
     try {

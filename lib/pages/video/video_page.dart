@@ -563,6 +563,7 @@ class _VideoPageState extends State<VideoPage>
         final selected = await roomSession.selectRoomMedia(
           bangumiId: localBangumiId,
           episode: episode,
+          localRoad: currentRoad,
         );
         if (!selected && mounted) {
           KazumiDialog.showToast(message: '切换房间选集失败，请重试');

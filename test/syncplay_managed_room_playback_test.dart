@@ -176,15 +176,14 @@ void main() {
     await _joinManagedRoom(controller, client, localOperator: true);
     client.emitFileChanged(name: '12345[3]', setBy: 'server-alice');
     await _settleUntil(() => controller.currentMedia != null);
-    controller.attachPlayback(
-      FakePlaybackBinding(
-        bangumiId: 12345,
-        currentEpisode: 3,
-        playing: false,
-        currentPosition: const Duration(seconds: 18),
-        playerPosition: const Duration(seconds: 18),
-      ),
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 3,
+      playing: false,
+      currentPosition: const Duration(seconds: 18),
+      playerPosition: const Duration(seconds: 18),
     );
+    controller.attachPlayback(binding);
     await Future<void>.delayed(Duration.zero);
 
     controller.setCurrentPosition();
@@ -201,10 +200,13 @@ void main() {
     final selection = controller.selectRoomMedia(
       bangumiId: 12345,
       episode: 4,
+      localRoad: 2,
     );
     await _settleUntil(() => client.setPlayingNames.contains('12345[4]'));
     client.emitFileChanged(name: '12345[4]', setBy: 'server-alice');
     expect(await selection, isTrue);
+    await _settleUntil(() => binding.episodeChanges.contains(4));
+    expect(binding.episodeChangeRoads, [2]);
 
     await _dispose(controller, client);
   });

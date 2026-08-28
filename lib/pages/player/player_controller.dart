@@ -339,13 +339,12 @@ class PlayerController implements Disposable {
   }
 
   Future<void> setPlaybackSpeed(double playerSpeed) async {
-    if (syncplay.isManagedRoom &&
-        syncplay.playbackParticipation ==
-            SyncPlayPlaybackParticipation.followingRoom &&
-        playerSpeed != 1.0) {
-      return;
-    }
-    await playback.setPlaybackSpeed(playerSpeed);
+    final effectiveSpeed = syncplay.isManagedRoom &&
+            syncplay.playbackParticipation ==
+                SyncPlayPlaybackParticipation.followingRoom
+        ? 1.0
+        : playerSpeed;
+    await playback.setPlaybackSpeed(effectiveSpeed);
     try {
       updateDanmakuSpeed();
     } catch (_) {}
@@ -591,14 +590,17 @@ class PlayerController implements Disposable {
     _changeEpisodeFromRoom = callback;
   }
 
-  Future<void> changeEpisodeFromRoom(int episode) async {
+  Future<void> changeEpisodeFromRoom(
+    int episode, {
+    int? preferredRoad,
+  }) async {
     final callback = _changeEpisodeFromRoom;
     if (callback == null) {
       return;
     }
     await callback(
       episode,
-      currentRoad: currentPlaybackRoad,
+      currentRoad: preferredRoad ?? currentPlaybackRoad,
       offset: 0,
     );
   }
