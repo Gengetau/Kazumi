@@ -158,7 +158,11 @@ void main() {
     await _settle();
     final media = session.currentMedia;
 
-    await _pumpRoomPage(tester, session);
+    await _pumpRoomPage(
+      tester,
+      session,
+      bangumiInfoLoader: (id) async => _bangumi(id, '测试番剧'),
+    );
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
 
@@ -183,7 +187,11 @@ void main() {
     );
     client.emitFileChanged(name: '12345[9]');
     await _settle();
-    await _pumpRoomPage(tester, session);
+    await _pumpRoomPage(
+      tester,
+      session,
+      bangumiInfoLoader: (id) async => _bangumi(id, '测试番剧'),
+    );
 
     await tester.tap(find.byTooltip('房间操作'));
     await tester.pump();
