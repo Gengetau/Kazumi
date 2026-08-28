@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -14,6 +15,10 @@ import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/utils/theme.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
+import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 
 class AppWidget extends StatefulWidget {
   const AppWidget({super.key});
@@ -25,7 +30,12 @@ class AppWidget extends StatefulWidget {
 class _AppWidgetState extends State<AppWidget>
     with TrayListener, WidgetsBindingObserver, WindowListener {
   final TrayManager trayManager = TrayManager.instance;
+  SyncPlayRoomSessionController get roomSession =>
+      inject<SyncPlayRoomSessionController>();
+  SyncPlayClipboardInviteService get inviteService =>
+      inject<SyncPlayClipboardInviteService>();
   bool showingExitDialog = false;
+  bool _showingInvitePrompt = false;
   bool _didApplyStoredThemeSettings = false;
   Brightness? _lastTitleBarBrightness;
 
@@ -36,6 +46,116 @@ class _AppWidgetState extends State<AppWidget>
     windowManager.addListener(this);
     WidgetsBinding.instance.addObserver(this);
     _initializePlatformIntegrations();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(
+        _checkClipboardInvite(SyncPlayClipboardCheckTrigger.startup),
+      );
+    });
+  }
+
+  void _configureInviteSessionMatcher() {
+    inviteService.setActiveSessionMatcher((invite) {
+      if (roomSession.syncplayRoom != invite.room) return false;
+      String endpoint = defaultSyncPlayEndPoint;
+      try {
+        endpoint = GStorage.getSetting<String>(SettingsKeys.syncPlayEndPoint);
+      } catch (_) {}
+      return endpoint.toLowerCase() == invite.server.toLowerCase();
+    });
+  }
+
+  Future<void> _checkClipboardInvite(
+    SyncPlayClipboardCheckTrigger trigger,
+  ) async {
+    if (!mounted || _showingInvitePrompt) return;
+    _configureInviteSessionMatcher();
+    final candidate = await inviteService.check(trigger: trigger);
+    if (!mounted || candidate == null || _showingInvitePrompt) return;
+    _showingInvitePrompt = true;
+    final invite = candidate.invite;
+    final accepted = await KazumiDialog.show<bool>(
+      clickMaskDismiss: false,
+      builder: (context) => AlertDialog(
+        title: const Text('发现一起看邀请'),
+        content: Text(
+          '房间：${invite.room}\n服务器：${invite.server}'
+          '${invite.episode == null ? '' : '\n剧集：第 ${invite.episode} 集'}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('忽略'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('接受'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) {
+      inviteService.rejectCandidate();
+      _showingInvitePrompt = false;
+      return;
+    }
+    var confirmUnknown = false;
+    if (inviteService.candidateNeedsServerConfirmation) {
+      confirmUnknown =
+          await KazumiDialog.show<bool>(
+            clickMaskDismiss: false,
+            builder: (context) => AlertDialog(
+              title: const Text('确认自定义服务器'),
+              content: Text('邀请将连接到 ${invite.server}，是否继续？'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('继续'),
+                ),
+              ],
+            ),
+          ) ==
+          true;
+      if (!confirmUnknown) {
+        inviteService.rejectCandidate();
+        _showingInvitePrompt = false;
+        return;
+      }
+    }
+    final acceptedInvite = inviteService.acceptCandidate(
+      confirmUnknownServer: confirmUnknown,
+    )
+        ? inviteService.takePending()
+        : null;
+    _showingInvitePrompt = false;
+    if (acceptedInvite != null) {
+      await _openInviteRoom(acceptedInvite);
+    }
+  }
+
+  Future<void> _openInviteRoom(SyncPlayInvite invite) async {
+    await GStorage.putSetting<String>(
+      SettingsKeys.syncPlayEndPoint,
+      invite.server,
+    );
+    var username =
+        GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
+    if (username.isEmpty) {
+      username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
+      await GStorage.putSetting<String>(
+        SettingsKeys.syncPlayUserName,
+        username,
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    context.pushNamed('/syncplay-room/');
+    unawaited(roomSession.createRoom(invite.room, username));
+    KazumiDialog.showToast(message: '已进入聊天室，请在房间页选择番剧后播放');
   }
 
   Future<void> _initializePlatformIntegrations() async {
@@ -262,15 +382,29 @@ class _AppWidgetState extends State<AppWidget>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
+    roomSession.setAppForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.paused) {
       KazumiLogger()
           .i("AppLifecycleState.paused: Application moved to background");
     } else if (state == AppLifecycleState.resumed) {
       KazumiLogger()
           .i("AppLifecycleState.resumed: Application moved to foreground");
+      unawaited(
+        _checkClipboardInvite(SyncPlayClipboardCheckTrigger.resume),
+      );
     } else if (state == AppLifecycleState.inactive) {
       KazumiLogger().i("AppLifecycleState.inactive: Application is inactive");
     }
+  }
+
+  @override
+  void onWindowFocus() {
+    roomSession.setWindowFocused(true);
+  }
+
+  @override
+  void onWindowBlur() {
+    roomSession.setWindowFocused(false);
   }
 
   @override

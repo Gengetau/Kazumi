@@ -9,6 +9,7 @@ import 'package:kazumi/bean/widget/collect_button.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/pages/info/info_controller.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/bean/card/bangumi_info_card.dart';
 import 'package:kazumi/pages/info/source_sheet.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
@@ -28,11 +29,13 @@ class InfoPage extends StatefulWidget {
     required this.inputBangumiItem,
     required this.infoController,
     required this.pluginsController,
+    this.playbackLaunchIntent,
   });
 
   final BangumiItem inputBangumiItem;
   final InfoController infoController;
   final PluginsController pluginsController;
+  final SyncPlayPlaybackLaunchIntent? playbackLaunchIntent;
 
   @override
   State<InfoPage> createState() => _InfoPageState();
@@ -514,7 +517,10 @@ class _InfoPageState extends State<InfoPage> with TickerProviderStateMixin {
                           Theme.of(context).scaffoldBackgroundColor,
                       context: context,
                       builder: (context) {
-                        return SourceSheet(infoController: infoController);
+                        return SourceSheet(
+                          infoController: infoController,
+                          playbackLaunchIntent: widget.playbackLaunchIntent,
+                        );
                       },
                     );
                   },

@@ -2,7 +2,6 @@
 
 import 'package:canvas_danmaku/canvas_danmaku.dart' as canvas;
 import 'package:kazumi/modules/danmaku/danmaku_module.dart';
-import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/request/apis/danmaku_api.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -100,8 +99,6 @@ abstract class _PlayerDanmakuController with Store {
   bool danmakuOn = false;
   @observable
   bool danmakuLoading = false;
-  DanmakuDestination danmakuDestination = DanmakuDestination.remoteDanmaku;
-
   int bangumiID = 0;
   int _scheduledDanmakuGeneration = 0;
 

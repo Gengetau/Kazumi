@@ -8,6 +8,7 @@ import 'package:kazumi/pages/player/player_pointer_interaction.dart';
 import 'package:kazumi/pages/player/player_screenshot_feedback_overlay.dart';
 import 'package:kazumi/pages/player/smallest_player_item_panel.dart';
 import 'package:kazumi/pages/player/syncplay_sheet.dart';
+import 'package:kazumi/pages/player/syncplay_chat_danmaku_overlay.dart';
 import 'package:kazumi/utils/constants.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
@@ -52,7 +53,8 @@ class PlayerItem extends StatefulWidget {
     required this.onBackPressed,
     required this.keyboardFocus,
     required this.sendDanmaku,
-    required this.showDanmakuDestinationPickerAndSend,
+    required this.openSyncPlayChat,
+    required this.ensureSyncPlayQuickChatReady,
     required this.pauseForTimedShutdown,
     this.disableAnimations = false,
   });
@@ -68,7 +70,8 @@ class PlayerItem extends StatefulWidget {
   final bool Function(String) sendDanmaku;
   final FocusNode keyboardFocus;
   final bool disableAnimations;
-  final Future<bool> Function(String) showDanmakuDestinationPickerAndSend;
+  final VoidCallback openSyncPlayChat;
+  final Future<bool> Function() ensureSyncPlayQuickChatReady;
   final VoidCallback pauseForTimedShutdown;
 
   @override
@@ -1630,6 +1633,19 @@ class _PlayerItemState extends State<PlayerItem>
                         ),
                       ),
                     ),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: videoPageController.isFullscreen ||
+                              videoPageController.isPip
+                          ? MediaQuery.sizeOf(context).height
+                          : (MediaQuery.sizeOf(context).width * 9 / 16),
+                      child: SyncPlayChatDanmakuOverlay(
+                        controller: playerController.chatDanmaku,
+                        isPip: videoPageController.isPip || _pipEnterRequested,
+                      ),
+                    ),
                     Positioned.fill(
                       child: PlayerScreenshotFeedbackOverlay(
                         animation: _screenshotFeedbackAnimation,
@@ -1660,14 +1676,15 @@ class _PlayerItemState extends State<PlayerItem>
                                     _panelVisibilityController,
                                 keyboardFocus: widget.keyboardFocus,
                                 sendDanmaku: widget.sendDanmaku,
+                                openSyncPlayChat: widget.openSyncPlayChat,
+                                ensureSyncPlayQuickChatReady:
+                                    widget.ensureSyncPlayQuickChatReady,
                                 acquirePlayerPanelHold: acquirePlayerPanelHold,
                                 onMenuVisibilityChanged:
                                     _handlePlayerMenuVisibilityChanged,
                                 handleDanmaku: handleDanmaku,
                                 showVideoInfo: showVideoInfo,
                                 showSyncPlayPanel: showSyncPlayPanel,
-                                showDanmakuDestinationPickerAndSend:
-                                    widget.showDanmakuDestinationPickerAndSend,
                                 pauseForTimedShutdown:
                                     widget.pauseForTimedShutdown,
                                 disableAnimations: widget.disableAnimations,
@@ -1696,6 +1713,11 @@ class _PlayerItemState extends State<PlayerItem>
                                 handleDanmaku: handleDanmaku,
                                 showVideoInfo: showVideoInfo,
                                 showSyncPlayPanel: showSyncPlayPanel,
+                                openSyncPlayChat: widget.openSyncPlayChat,
+                                ensureSyncPlayQuickChatReady:
+                                    widget.ensureSyncPlayQuickChatReady,
+                                toggleMenu: widget.toggleMenu,
+                                keyboardFocus: widget.keyboardFocus,
                                 pauseForTimedShutdown:
                                     widget.pauseForTimedShutdown,
                                 disableAnimations: widget.disableAnimations,

@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/services/player/external_playback_launcher.dart';
 import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
+import 'package:kazumi/pages/player/controller/player_chat_danmaku_controller.dart';
 import 'package:kazumi/pages/player/controller/player_debug_controller.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/controller/player_seek_controller.dart';
@@ -13,7 +14,9 @@ import 'package:kazumi/pages/player/controller/player_aspect_ratio.dart';
 import 'package:kazumi/pages/player/controller/player_panel_controller.dart';
 import 'package:kazumi/pages/player/controller/player_playback_controller.dart';
 import 'package:kazumi/pages/player/controller/player_super_resolution.dart';
-import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/pages/player/controller/player_syncplay_binding.dart';
+import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_playback_binding.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
@@ -29,11 +32,21 @@ class PlayerController implements Disposable {
     this.shaderAssetService,
     DownloadController downloadController,
     this.audioController,
+    this.syncplay,
   ) {
     danmaku = PlayerDanmakuController(
       isLocalPlayback: () => isLocalPlayback,
       downloadController: downloadController,
     );
+    syncplay.loadChatDanmakuSetting();
+    chatDanmaku = PlayerChatDanmakuController(
+      initialEnabled: syncplay.chatDanmakuEnabled,
+      onEnabledChanged: syncplay.setChatDanmakuEnabled,
+    );
+    _chatDanmakuSubscription = syncplay.chatStream.listen((message) {
+      if (!message.fromRemote) return;
+      chatDanmaku.addMessage(message.message, username: message.username);
+    });
   }
 
   final ShaderAssetService shaderAssetService;
@@ -44,24 +57,47 @@ class PlayerController implements Disposable {
   final PlayerDebugController debug = PlayerDebugController();
 
   late final PlayerDanmakuController danmaku;
+  late final PlayerChatDanmakuController chatDanmaku;
+  late final StreamSubscription<SyncPlayChatMessage>
+      _chatDanmakuSubscription;
   late final PlayerPlaybackController playback = PlayerPlaybackController(
     shaderAssetService: shaderAssetService,
     debug: debug,
     videoUrl: () => videoUrl,
     isLocalPlayback: () => isLocalPlayback,
   );
-  late final PlayerSyncPlayController syncplay = PlayerSyncPlayController(
-    bangumiId: () => bangumiId,
-    currentEpisode: () => currentEpisode,
-    currentRoad: () => currentRoad,
-    playing: () => playback.playing,
-    currentPosition: () => playback.currentPosition,
-    playerPosition: () => playback.playerPosition,
-    duration: () => playback.duration,
-    pause: pause,
-    play: play,
-    seek: seek,
-  );
+  /// A shared app-scoped room session.  PlayerController never disposes it;
+  /// it only supplies temporary playback state while this route is active.
+  final SyncPlayRoomSessionController syncplay;
+  late final PlayerSyncPlayBinding _syncplayBinding =
+      PlayerSyncPlayBinding(this);
+  SyncPlayPlaybackAttachment? _syncplayAttachment;
+  Future<void> Function(int episode, {int currentRoad, int offset})?
+      _changeEpisodeFromRoom;
+
+  int get currentBangumiId {
+    try {
+      return bangumiId;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int get currentPlaybackEpisode {
+    try {
+      return currentEpisode;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int get currentPlaybackRoad {
+    try {
+      return currentRoad;
+    } catch (_) {
+      return 0;
+    }
+  }
   late final PlayerSeekController seeking = PlayerSeekController(
     playback: playback,
     danmaku: danmaku,
@@ -80,6 +116,7 @@ class PlayerController implements Disposable {
   late int currentDanmakuEpisodeNumber;
   late int currentRoad;
   late String referer;
+  String currentBangumiName = '';
   String? coverUrl;
   String videoUrl = '';
   bool isLocalPlayback = false;
@@ -174,6 +211,7 @@ class PlayerController implements Disposable {
     currentDanmakuEpisodeNumber = params.danmakuEpisodeNumber;
     currentRoad = params.currentRoad;
     referer = params.referer;
+    currentBangumiName = params.bangumiName ?? '';
 
     KazumiLogger().i(
         'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
@@ -273,13 +311,7 @@ class PlayerController implements Disposable {
 
     coverUrl = params.coverUrl;
 
-    if (syncplay.syncplayController?.isConnected ?? false) {
-      if (syncplay.syncplayController!.currentFileName !=
-          "$bangumiId[$currentEpisode]") {
-        setSyncPlayPlayingBangumi(
-            forceSyncPlaying: true, forceSyncPosition: 0.0);
-      }
-    }
+    _syncplayAttachment ??= syncplay.attachPlayback(_syncplayBinding);
     return true;
   }
 
@@ -382,6 +414,13 @@ class PlayerController implements Disposable {
   /// method returns.
   void beginShutdown() {
     _initializations.close();
+    unawaited(_chatDanmakuSubscription.cancel());
+    chatDanmaku.dispose();
+    final attachment = _syncplayAttachment;
+    if (attachment != null) {
+      syncplay.detachPlayback(attachment);
+      _syncplayAttachment = null;
+    }
     if (_shutdownFuture != null) {
       return;
     }
@@ -401,7 +440,6 @@ class PlayerController implements Disposable {
   Future<void> _shutdownResources() async {
     await Future.wait([
       _releasePlaybackResources(),
-      syncplay.dispose(),
     ]);
   }
 
@@ -459,11 +497,25 @@ class PlayerController implements Disposable {
       String room,
       String username,
       Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode) async {
+          changeEpisode,
+      {bool preserveChatHistory = false}) async {
+    _changeEpisodeFromRoom = changeEpisode;
     await syncplay.createRoom(
       room,
       username,
-      changeEpisode,
+      preserveChatHistory: preserveChatHistory,
+    );
+  }
+
+  Future<void> changeEpisodeFromRoom(int episode) async {
+    final callback = _changeEpisodeFromRoom;
+    if (callback == null) {
+      return;
+    }
+    await callback(
+      episode,
+      currentRoad: currentPlaybackRoad,
+      offset: 0,
     );
   }
 
@@ -487,11 +539,35 @@ class PlayerController implements Disposable {
     await syncplay.requestSync(doSeek: doSeek);
   }
 
-  Future<void> sendSyncPlayChatMessage(String message) async {
-    await syncplay.sendChatMessage(message);
+  Future<bool> trySendSyncPlayChatMessage(String message) {
+    return syncplay.trySendChatMessage(message);
   }
+
+  Future<bool> ensureSyncPlayChatReady({
+    required Future<void> Function() promptJoin,
+    bool forcePrompt = false,
+  }) =>
+      syncplay.ensureSyncPlayChatReady(
+        promptJoin: promptJoin,
+        forcePrompt: forcePrompt,
+      );
+
+  void resetSyncPlayChatEntryPrompt() =>
+      syncplay.resetSyncPlayChatEntryPrompt();
+
+  Future<void> sendSyncPlayChatMessage(String message) async {
+    await trySendSyncPlayChatMessage(message);
+  }
+
+  /// Compatibility delegate; room semantics are owned by the shared
+  /// app-scoped session rather than this temporary player controller.
+  String syncPlayInviteText() => syncplay.syncPlayInviteText(
+        localTitle: currentBangumiName,
+        localBangumiId: currentBangumiId,
+      );
 
   Future<void> exitSyncPlayRoom() async {
     await syncplay.exitRoom();
+    resetSyncPlayChatEntryPrompt();
   }
 }

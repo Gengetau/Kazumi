@@ -24,9 +24,11 @@ class SourceSheet extends StatefulWidget {
   const SourceSheet({
     super.key,
     required this.infoController,
+    this.playbackLaunchIntent,
   });
 
   final InfoController infoController;
+  final SyncPlayPlaybackLaunchIntent? playbackLaunchIntent;
 
   @override
   State<SourceSheet> createState() => _SourceSheetState();
@@ -166,6 +168,7 @@ class _SourceSheetState extends State<SourceSheet> {
           title: searchItem.name,
           src: searchItem.src,
           roads: roads,
+          launchIntent: widget.playbackLaunchIntent,
         ),
       );
     } catch (_) {

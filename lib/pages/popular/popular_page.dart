@@ -13,6 +13,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
 import 'package:kazumi/utils/device.dart';
+import 'package:kazumi/pages/syncplay_room/syncplay_room_entry_button.dart';
 
 class PopularPage extends StatefulWidget {
   const PopularPage({
@@ -239,6 +240,7 @@ class _PopularPageState extends State<PopularPage> {
           icon: const Icon(Icons.search),
         ),
     ];
+    actions.add(const SyncPlayRoomEntryButton());
     actions.add(
       IconButton(
         tooltip: '历史记录',
