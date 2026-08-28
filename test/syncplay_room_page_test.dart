@@ -51,8 +51,8 @@ Future<void> _disposeSession(
   SyncPlayRoomSessionController session,
   FakeSyncplayClient client,
 ) async {
-  await session.dispose();
   await client.closeStreams();
+  await session.dispose();
 }
 
 Future<void> _pumpRoomPage(
