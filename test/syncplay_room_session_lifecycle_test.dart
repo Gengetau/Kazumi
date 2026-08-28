@@ -356,6 +356,16 @@ void main() {
       currentEpisode: 9,
     );
     controller.attachPlayback(binding);
+    await _settle();
+
+    // Attaching to an empty room publishes the video-first media once. Clear
+    // that automatic publication before exercising the explicit sync API.
+    expect(client.setPlayingNames, ['12345[9]']);
+    expect(client.syncRequests, [null]);
+    client.setPlayingNames.clear();
+    client.pausedValues.clear();
+    client.positions.clear();
+    client.syncRequests.clear();
 
     await controller.setPlayingBangumi(
       forceSyncPlaying: true,

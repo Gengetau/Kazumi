@@ -12,6 +12,7 @@ import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
