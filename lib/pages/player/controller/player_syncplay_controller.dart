@@ -268,6 +268,8 @@ abstract class _PlayerSyncPlayController with Store {
   String _activeChatRoom = '';
   String _requestedChatRoom = '';
   String _requestedUsername = '';
+  SyncPlayRoomControlMode _requestedControlMode = SyncPlayRoomControlMode.free;
+  bool _requestedManagedRoomCreation = false;
   String? _requestedOperatorPassword;
   bool _connectionLossHandled = false;
   Future<void>? _retryFuture;
@@ -918,6 +920,8 @@ abstract class _PlayerSyncPlayController with Store {
     _cancelMediaSelection();
     _requestedChatRoom = room;
     _requestedUsername = username;
+    _requestedControlMode = requestedControlMode;
+    _requestedManagedRoomCreation = createManagedRoom;
     _requestedOperatorPassword = operatorPassword;
     final session = _connectionSessions.begin();
     _activeConnectionSession = session;
@@ -1160,6 +1164,7 @@ abstract class _PlayerSyncPlayController with Store {
         activeOperatorPassword = password;
         effectiveControlMode = SyncPlayRoomControlMode.managed;
         _requestedChatRoom = authoritativeRoom;
+        _requestedManagedRoomCreation = false;
         _requestedOperatorPassword = password;
       } else if (effectiveControlMode == SyncPlayRoomControlMode.managed) {
         if (!hello.features.managedRooms) {
@@ -1245,7 +1250,7 @@ abstract class _PlayerSyncPlayController with Store {
       _cancelMediaSelection();
       if (createManagedRoom) {
         roomUsers.clear();
-        _roomControlMode.value = SyncPlayRoomControlMode.free;
+        _roomControlMode.value = SyncPlayRoomControlMode.managed;
         _operatorAuthState.value = SyncPlayOperatorAuthState.failed;
         _operatorPassword.value = null;
         _managedRoomBaseName.value = null;
@@ -1464,10 +1469,23 @@ abstract class _PlayerSyncPlayController with Store {
       }
       return;
     }
-    await createRoom(
+    if (_requestedManagedRoomCreation) {
+      await _connectRoom(
+        room,
+        username,
+        preserveChatHistory: true,
+        requestedControlMode: SyncPlayRoomControlMode.managed,
+        operatorPassword: generateSyncPlayOperatorPassword(),
+        createManagedRoom: true,
+      );
+      return;
+    }
+    await _connectRoom(
       room,
       username,
       preserveChatHistory: true,
+      requestedControlMode: _requestedControlMode,
+      operatorPassword: _requestedOperatorPassword,
     );
   }
 
@@ -2015,6 +2033,8 @@ $mediaDetails${uri.isEmpty ? '' : '$uri\n'}
       _clearManagedRoomState();
       _requestedChatRoom = '';
       _requestedUsername = '';
+      _requestedControlMode = SyncPlayRoomControlMode.free;
+      _requestedManagedRoomCreation = false;
       _connectionLossHandled = true;
     } else if (systemMessage != null) {
       appendSystemMessage(systemMessage);

@@ -116,6 +116,47 @@ void main() {
     await _dispose(controller, [client]);
   });
 
+  test('retrying managed room creation never downgrades to a free room',
+      () async {
+    final firstClient = FakeSyncplayClient();
+    final retryClient = FakeSyncplayClient(serverFeatures: _features);
+    final controller = _controllerFor([firstClient, retryClient]);
+
+    expect(await controller.createManagedRoom('room-a', 'alice'), isFalse);
+    expect(controller.connectionState, SyncPlayConnectionState.failed);
+
+    final retry = controller.retryConnection();
+    await _settleUntil(() => retryClient.controllerAuthRequests.length == 1);
+    final password = retryClient.controllerAuthRequests.first.password;
+    retryClient.emitControlledRoomCreated(
+      roomName: _managedRoom,
+      password: password,
+    );
+    await _settleUntil(() => retryClient.controllerAuthRequests.length == 2);
+    retryClient.emitControllerAuth(
+      username: 'server-alice',
+      room: _managedRoom,
+      success: true,
+    );
+    await _settleUntil(() => retryClient.userListRequests == 1);
+    retryClient.emitUserList(const [
+      SyncplayRoomUser(
+        username: 'server-alice',
+        room: _managedRoom,
+        isController: true,
+      ),
+    ]);
+    await retry;
+
+    expect(controller.connectionState, SyncPlayConnectionState.connected);
+    expect(controller.roomControlMode, SyncPlayRoomControlMode.managed);
+    expect(controller.syncplayRoom, _managedRoom);
+    expect(controller.isRoomOperator, isTrue);
+    expect(retryClient.controllerAuthRequests, hasLength(2));
+
+    await _dispose(controller, [firstClient, retryClient]);
+  });
+
   test('joins a managed room as a normal member', () async {
     final client = FakeSyncplayClient(
       acceptedRoom: _managedRoom,
