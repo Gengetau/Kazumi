@@ -71,6 +71,12 @@ Future<void> _pumpRoomPage(
   await tester.pump();
 }
 
+Future<void> _unmountRoomPage(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump();
+  await _settle();
+}
+
 void main() {
   testWidgets('disconnected room page offers create and join', (
     WidgetTester tester,
@@ -82,7 +88,7 @@ void main() {
     expect(find.text('创建房间'), findsOneWidget);
     expect(find.text('加入房间'), findsWidgets);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
@@ -99,7 +105,7 @@ void main() {
     expect(find.text('选择番剧'), findsOneWidget);
     expect(session.currentMedia, isNull);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
@@ -124,7 +130,7 @@ void main() {
     expect(find.textContaining('第 9 集'), findsOneWidget);
     expect(find.textContaining('peer 选择'), findsOneWidget);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
@@ -144,7 +150,7 @@ void main() {
     expect(find.text('先聊一会儿'), findsOneWidget);
     expect(client.connected, isTrue);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
@@ -163,8 +169,7 @@ void main() {
       session,
       bangumiInfoLoader: (id) async => _bangumi(id, '测试番剧'),
     );
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
+    await _unmountRoomPage(tester);
 
     expect(client.disconnectCalls, 0);
     expect(client.connected, isTrue);
@@ -209,7 +214,7 @@ void main() {
     expect(session.currentMedia, isNull);
     expect(session.chatMessages, isEmpty);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
@@ -235,7 +240,7 @@ void main() {
     expect(find.byTooltip('一起看：已连接，1 条未读'), findsOneWidget);
     expect(find.byType(Badge), findsOneWidget);
 
-    await tester.pumpWidget(const SizedBox.shrink());
+    await _unmountRoomPage(tester);
     await _disposeSession(session, client);
   });
 
