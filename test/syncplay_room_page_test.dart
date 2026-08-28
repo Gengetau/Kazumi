@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/navigation.dart';
 import 'package:kazumi/modules/roads/road_module.dart';
 import 'package:kazumi/pages/info/info_route_args.dart';
 import 'package:kazumi/pages/syncplay_room/syncplay_room_entry_button.dart';
@@ -51,8 +52,8 @@ Future<void> _disposeSession(
   SyncPlayRoomSessionController session,
   FakeSyncplayClient client,
 ) async {
-  await client.closeStreams();
   await session.dispose();
+  await client.closeStreams();
 }
 
 Future<void> _pumpRoomPage(
@@ -62,6 +63,7 @@ Future<void> _pumpRoomPage(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      navigatorObservers: [rootRouteObserver],
       home: SyncPlayRoomPage(
         roomSession: session,
         bangumiInfoLoader: bangumiInfoLoader,
@@ -238,6 +240,35 @@ void main() {
 
     expect(find.byTooltip('一起看：已连接，1 条未读'), findsOneWidget);
     expect(find.byType(Badge), findsOneWidget);
+
+    await _unmountRoomPage(tester);
+    await _disposeSession(session, client);
+  });
+
+  testWidgets('covered room page records incoming chat as unread', (
+    WidgetTester tester,
+  ) async {
+    final client = FakeSyncplayClient();
+    final session = _sessionFor(client);
+    await session.createRoom('room-a', 'alice');
+    await _pumpRoomPage(tester, session);
+
+    final roomContext = tester.element(find.byType(SyncPlayRoomPage));
+    Navigator.of(roomContext).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('covering route')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    client.emitChat(username: 'peer', message: '被覆盖时收到');
+    await _settle();
+    await tester.pump();
+    expect(session.unreadChatCount, 1);
+
+    Navigator.of(tester.element(find.text('covering route'))).pop();
+    await tester.pumpAndSettle();
+    expect(session.unreadChatCount, 0);
 
     await _unmountRoomPage(tester);
     await _disposeSession(session, client);

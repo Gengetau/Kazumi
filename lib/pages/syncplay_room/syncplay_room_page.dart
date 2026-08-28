@@ -7,6 +7,7 @@ import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/navigation.dart';
 import 'package:kazumi/pages/info/info_route_args.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
@@ -46,7 +47,7 @@ class SyncPlayRoomPage extends StatefulWidget {
 /// Short alias for callers that use the document's `RoomPage` name.
 typedef RoomPage = SyncPlayRoomPage;
 
-class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
+class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   SyncPlayRoomSessionController get roomSession => widget.roomSession;
 
   late final Object _chatSurface;
@@ -71,9 +72,29 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute<void>) {
+      rootRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPushNext() {
+    roomSession.setChatSurfaceVisible(_chatSurface, false);
+  }
+
+  @override
+  void didPopNext() {
+    roomSession.setChatSurfaceVisible(_chatSurface, true);
+  }
+
+  @override
   void dispose() {
     // A page disappearing is not an explicit room exit. The app-scoped
     // session and socket must remain available to the next room surface.
+    rootRouteObserver.unsubscribe(this);
     roomSession.unregisterChatSurface(_chatSurface);
     unawaited(_mediaSubscription.cancel());
     _mediaInfoSessions.close();
