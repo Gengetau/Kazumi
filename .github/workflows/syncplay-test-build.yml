@@ -36,8 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
-            '+refs/heads/feat/syncplay-chat-room:refs/remotes/origin/feat/syncplay-chat-room'
-          FEATURE_SHA="$(git rev-parse refs/remotes/origin/feat/syncplay-chat-room)"
+            '+refs/heads/feat/syncplay-managed-room:refs/remotes/origin/feat/syncplay-managed-room'
+          FEATURE_SHA="$(git rev-parse refs/remotes/origin/feat/syncplay-managed-room)"
           TEST_SHA="$(git rev-parse HEAD)"
           MERGE_BASE="$(git merge-base "$FEATURE_SHA" "$TEST_SHA")"
 
@@ -46,7 +46,7 @@ jobs:
           echo "MERGE_BASE=$MERGE_BASE"
           if ! git merge-base --is-ancestor "$FEATURE_SHA" "$TEST_SHA"; then
             echo 'ERROR: test branch does not contain the current feature branch HEAD.' >&2
-            echo 'Rebase test/syncplay-chat-room-build onto feat/syncplay-chat-room and push it first.' >&2
+            echo 'Rebase test/syncplay-chat-room-build onto feat/syncplay-managed-room and push it first.' >&2
             exit 1
           fi
           if [[ "$MERGE_BASE" != "$FEATURE_SHA" ]]; then

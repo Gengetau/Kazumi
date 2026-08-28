@@ -2,7 +2,7 @@ Product: Kazumi SyncPlay Test
 Status: Unofficial temporary test build
 Upstream: Predidit/Kazumi
 License: GPL-3.0
-Feature branch: feat/syncplay-chat-room
+Feature branch: feat/syncplay-managed-room
 Feature source SHA: @FEATURE_SOURCE_SHA@
 Test build branch: test/syncplay-chat-room-build
 Exact corresponding source SHA: @TEST_SOURCE_SHA@
@@ -12,7 +12,7 @@ Build ID: @BUILD_ID@
 Signing mode: @SIGNING_MODE@
 Upgrade requires uninstall: @UPGRADE_REQUIRES_UNINSTALL@
 Modified components:
-- SyncPlay chat-room feature
+- SyncPlay persistent room and Managed Room features
 - temporary test branding
 - isolated package and executable identity
 - temporary test build workflow

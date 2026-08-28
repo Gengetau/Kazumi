@@ -2,8 +2,8 @@
 
 This directory describes the temporary packaging layer for
 `test/syncplay-chat-room-build`. It is deliberately kept separate from the
-`feat/syncplay-chat-room` feature branch, and it must not be merged back into
-that branch.
+`feat/syncplay-managed-room` feature branch, and it must not be merged back
+into that branch.
 
 The test layer provides:
 
