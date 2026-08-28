@@ -17,7 +17,10 @@ import 'syncplay_test_doubles.dart';
 
 Future<void> _settle([int turns = 5]) async {
   for (var i = 0; i < turns; i++) {
-    await Future<void>.delayed(Duration.zero);
+    // Widget tests run in FakeAsync. A zero-duration Future.delayed still
+    // creates a timer and can wait forever unless WidgetTester pumps time.
+    // StreamController delivery only needs microtask turns here.
+    await Future<void>.value();
   }
 }
 
