@@ -301,6 +301,7 @@ class FakePlaybackBinding implements SyncPlayPlaybackBinding {
 
   final List<Duration> seekCalls = <Duration>[];
   final List<int> episodeChanges = <int>[];
+  final List<int?> episodeChangeRoads = <int?>[];
   int playCalls = 0;
   int pauseCalls = 0;
   int publishCalls = 0;
@@ -331,8 +332,12 @@ class FakePlaybackBinding implements SyncPlayPlaybackBinding {
   }
 
   @override
-  Future<void> changeEpisodeFromRoom(int episode) async {
+  Future<void> changeEpisodeFromRoom(
+    int episode, {
+    int? preferredRoad,
+  }) async {
     episodeChanges.add(episode);
+    episodeChangeRoads.add(preferredRoad);
     final gate = episodeChangeGate;
     if (gate != null) {
       await gate.future;

@@ -24,7 +24,10 @@ abstract interface class SyncPlayPlaybackBinding {
 
   Future<void> seekFromRoom(Duration position);
 
-  Future<void> changeEpisodeFromRoom(int episode);
+  Future<void> changeEpisodeFromRoom(
+    int episode, {
+    int? preferredRoad,
+  });
 
   Future<void> publishCurrentMedia({
     bool? forcePlaying,

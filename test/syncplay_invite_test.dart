@@ -24,6 +24,25 @@ void main() {
     expect(invite.bangumi, 42);
   });
 
+  test('round trips managed room names without an operator password', () {
+    const room = '+room-1:ABCDEF123456';
+    final text = SyncPlayInviteCodec.encode(
+      room: room,
+      server: 'syncplay.pl:8996',
+      episode: 3,
+      bangumi: 42,
+    );
+    final invite = SyncPlayInviteCodec.tryParse(text)!;
+
+    expect(invite.room, room);
+    expect(text, isNot(contains('AB-123-456')));
+
+    final legacy = SyncPlayInviteCodec.tryParse('''Kazumi 一起看邀请
+房间：$room
+服务器：syncplay.pl:8996''');
+    expect(legacy?.room, room);
+  });
+
   test('rejects unsupported and unrelated input', () {
     expect(
       SyncPlayInviteCodec.tryParse(
