@@ -115,15 +115,14 @@ void main() {
     final client = FakeSyncplayClient();
     final session = _sessionFor(client);
     await session.createRoom('room-a', 'alice');
+    client.emitFileChanged(name: '12345[9]', setBy: 'peer');
+    await _settle();
     await _pumpRoomPage(
       tester,
       session,
       bangumiInfoLoader: (id) async => _bangumi(id, '测试番剧'),
     );
-
-    client.emitFileChanged(name: '12345[9]', setBy: 'peer');
     await _settle();
-    await tester.pump();
     await tester.pump();
 
     expect(find.text('测试番剧'), findsOneWidget);
