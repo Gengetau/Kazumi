@@ -59,9 +59,11 @@ final class SyncPlayRoomMediaChanged extends SyncPlayRoomMediaEvent {
 final class SyncPlayRoomMediaMismatch extends SyncPlayRoomMediaEvent {
   final SyncPlayRoomMedia roomMedia;
   final int localBangumiId;
+  final int? localEpisode;
 
   const SyncPlayRoomMediaMismatch({
     required this.roomMedia,
     required this.localBangumiId,
+    this.localEpisode,
   });
 }

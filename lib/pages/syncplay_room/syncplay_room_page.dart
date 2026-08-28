@@ -7,12 +7,15 @@ import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/pages/info/info_route_args.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
+import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -189,6 +192,56 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
     } else if (media != null) {
       unawaited(_loadMediaInfo(media, force: true));
     }
+  }
+
+  Future<void> _enterPlayback() async {
+    final media = roomSession.currentMedia;
+    final bangumi = _mediaInfoBangumi;
+    if (media == null || bangumi == null) {
+      return;
+    }
+    final launchIntent = SyncPlayPlaybackLaunchIntent(
+      expectedBangumiId: media.bangumiId,
+      expectedEpisode: media.episode,
+      expectedMediaGeneration: media.generation,
+    );
+    if (!roomSession.isPlaybackLaunchIntentCurrent(launchIntent)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('房间媒体刚刚更新，请刷新后再进入播放')),
+        );
+      }
+      return;
+    }
+    await context.pushNamed(
+      '/info/',
+      arguments: InfoPageRouteArgs(
+        bangumiItem: bangumi,
+        playbackLaunchIntent: launchIntent,
+      ),
+    );
+  }
+
+  Future<void> _joinClipboardInvite(SyncPlayInvite invite) async {
+    inject<SyncPlayClipboardInviteService>().takePending();
+    await GStorage.putSetting<String>(
+      SettingsKeys.syncPlayEndPoint,
+      invite.server,
+    );
+    var username = '';
+    try {
+      username = GStorage
+          .getSetting<String>(SettingsKeys.syncPlayUserName)
+          .trim();
+    } catch (_) {}
+    if (username.isEmpty) {
+      username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
+      await GStorage.putSetting<String>(
+        SettingsKeys.syncPlayUserName,
+        username,
+      );
+    }
+    await roomSession.createRoom(invite.room, username);
   }
 
   String _endpoint() {
@@ -448,7 +501,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
-                    onPressed: null,
+                    onPressed: _mediaInfoBangumi == null || _mediaInfoLoading
+                        ? null
+                        : _enterPlayback,
                     child: const Text('进入播放'),
                   ),
                 ),
@@ -484,6 +539,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> {
                   onServerSettings: () => unawaited(_showServerForm()),
                   onRetry: roomSession.retryConnection,
                   inviteTextBuilder: roomSession.syncPlayInviteText,
+                  enableClipboardJoin: true,
+                  onClipboardInviteAccepted: _joinClipboardInvite,
                 ),
                 if (connected) ...[
                   const SizedBox(height: 12),

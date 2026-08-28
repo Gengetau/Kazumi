@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/pages/player/controller/player_syncplay_controller.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/services/player/syncplay_media_codec.dart';
 import 'package:kazumi/services/player/syncplay_room_models.dart';
 
@@ -89,6 +90,51 @@ void main() {
     expect(controller.currentMedia!.generation, 1);
     expect(controller.mediaGeneration, 1);
     expect(controller.localMediaStatus, SyncPlayLocalMediaStatus.idle);
+    await _disposeController(controller, client);
+  });
+
+  test('video-first attachment publishes media when the room is empty',
+      () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 9,
+    );
+
+    controller.attachPlayback(binding);
+    await _settle(8);
+
+    expect(controller.currentMedia, isNull);
+    expect(client.setPlayingNames, ['12345[9]']);
+    expect(client.syncRequests, [null]);
+    await _disposeController(controller, client);
+  });
+
+  test('launch intent follows the room media generation', () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+
+    const initial = SyncPlayPlaybackLaunchIntent(
+      expectedBangumiId: 12345,
+      expectedEpisode: 9,
+      expectedMediaGeneration: 0,
+    );
+    expect(controller.isPlaybackLaunchIntentCurrent(initial), isTrue);
+
+    client.emitFileChanged(name: '12345[9]', setBy: 'peer');
+    await _settle();
+
+    expect(controller.isPlaybackLaunchIntentCurrent(initial), isFalse);
+    final media = controller.currentMedia!;
+    final current = SyncPlayPlaybackLaunchIntent(
+      expectedBangumiId: media.bangumiId,
+      expectedEpisode: media.episode,
+      expectedMediaGeneration: media.generation,
+    );
+    expect(controller.isPlaybackLaunchIntentCurrent(current), isTrue);
     await _disposeController(controller, client);
   });
 
@@ -268,6 +314,59 @@ void main() {
     expect(binding.episodeChanges, [9]);
     expect(binding.currentEpisode, 9);
     expect(controller.currentMedia!.episode, 9);
+    await _disposeController(controller, client);
+  });
+
+  test('attaching to a same-bangumi room media follows its episode', () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+    client.emitFileChanged(name: '12345[9]', setBy: 'peer');
+    client.emitPosition(position: 25, paused: true, doSeek: true);
+    await _settle();
+
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 8,
+      playing: true,
+    )..episodeChangeGate = Completer<void>();
+    controller.attachPlayback(binding);
+    await _settle();
+
+    expect(binding.episodeChanges, [9]);
+    expect(binding.seekCalls, isEmpty);
+    binding.episodeChangeGate!.complete();
+    await _settle();
+
+    expect(binding.currentEpisode, 9);
+    expect(binding.seekCalls, [const Duration(seconds: 25)]);
+    expect(binding.pauseCalls, 1);
+    await _disposeController(controller, client);
+  });
+
+  test('attaching to a different-bangumi room media only emits a mismatch',
+      () async {
+    final client = FakeSyncplayClient();
+    final controller = _controllerFor(client);
+    await controller.createRoom('room-a', 'alice');
+    client.emitFileChanged(name: '67890[3]', setBy: 'peer');
+    await _settle();
+
+    final events = <SyncPlayRoomMediaEvent>[];
+    final subscription = controller.mediaEvents.listen(events.add);
+    final binding = FakePlaybackBinding(
+      bangumiId: 12345,
+      currentEpisode: 9,
+    );
+    controller.attachPlayback(binding);
+    await _settle();
+
+    expect(binding.episodeChanges, isEmpty);
+    final mismatches = events.whereType<SyncPlayRoomMediaMismatch>();
+    expect(mismatches, hasLength(1));
+    expect(mismatches.single.localBangumiId, 12345);
+    expect(mismatches.single.localEpisode, 9);
+    await subscription.cancel();
     await _disposeController(controller, client);
   });
 

@@ -312,14 +312,6 @@ class PlayerController implements Disposable {
     coverUrl = params.coverUrl;
 
     _syncplayAttachment ??= syncplay.attachPlayback(_syncplayBinding);
-
-    if (syncplay.syncplayController?.isConnected ?? false) {
-      if (syncplay.syncplayController!.currentFileName !=
-          "$bangumiId[$currentEpisode]") {
-        setSyncPlayPlayingBangumi(
-            forceSyncPlaying: true, forceSyncPosition: 0.0);
-      }
-    }
     return true;
   }
 

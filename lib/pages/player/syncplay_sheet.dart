@@ -12,6 +12,7 @@ import 'package:kazumi/pages/player/player_controller.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
 import 'package:kazumi/services/player/syncplay_clipboard_invite_service.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_invite.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
 
@@ -234,6 +235,7 @@ class SyncPlayRoomHome extends StatelessWidget {
     this.onRetry,
     this.inviteTextBuilder,
     this.enableClipboardJoin = false,
+    this.onClipboardInviteAccepted,
   });
 
   final SyncPlayRoomSessionController controller;
@@ -244,6 +246,8 @@ class SyncPlayRoomHome extends StatelessWidget {
   final VoidCallback? onRetry;
   final String Function()? inviteTextBuilder;
   final bool enableClipboardJoin;
+  final Future<void> Function(SyncPlayInvite invite)?
+      onClipboardInviteAccepted;
 
   Future<void> _joinFromClipboard(BuildContext context) async {
     final service = inject<SyncPlayClipboardInviteService>();
@@ -301,7 +305,15 @@ class SyncPlayRoomHome extends StatelessWidget {
       service.rejectCandidate();
       return;
     }
-    if (context.mounted) Navigator.of(context).pop();
+    if (!context.mounted) {
+      return;
+    }
+    final onAccepted = onClipboardInviteAccepted;
+    if (onAccepted != null) {
+      await onAccepted(invite);
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   @override

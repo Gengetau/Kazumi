@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/player/syncplay_client.dart';
@@ -90,6 +91,25 @@ abstract class _PlayerSyncPlayController with Store {
   bool get hasPlaybackBinding => _playbackBinding != null;
 
   SyncPlayPlaybackBinding? get playbackBinding => _playbackBinding;
+
+  /// Returns whether a route opened for [intent] still points at the current
+  /// room media snapshot.  Generation zero represents a video-first route
+  /// entering a room that has not selected media yet.
+  bool isPlaybackLaunchIntentCurrent(SyncPlayPlaybackLaunchIntent intent) {
+    if (!intent.isValid || syncplayRoom.isEmpty) {
+      return false;
+    }
+    if (_mediaGeneration != intent.expectedMediaGeneration) {
+      return false;
+    }
+    final media = currentMedia;
+    if (media == null) {
+      return intent.expectedMediaGeneration == 0;
+    }
+    return media.generation == intent.expectedMediaGeneration &&
+        media.bangumiId == intent.expectedBangumiId &&
+        media.episode == intent.expectedEpisode;
+  }
 
   SyncPlayPlaybackAttachment attachPlayback(SyncPlayPlaybackBinding binding) {
     final attachment = SyncPlayPlaybackAttachment(
@@ -327,20 +347,36 @@ abstract class _PlayerSyncPlayController with Store {
     final binding = attachment.binding;
     final media = currentMedia;
     if (media != null) {
+      final mediaGeneration = media.generation;
       if (media.bangumiId != binding.bangumiId) {
         _emitMediaEvent(
           SyncPlayRoomMediaMismatch(
             roomMedia: media,
             localBangumiId: binding.bangumiId,
+            localEpisode: binding.currentEpisode,
           ),
         );
         return;
       } else if (media.episode != binding.currentEpisode) {
+        // The room already selected this Bangumi, so use the normal player
+        // episode transition before restoring its latest position/state.
         await binding.changeEpisodeFromRoom(media.episode);
-        if (!_isCurrentPlayback(attachment)) {
+        final latestMedia = currentMedia;
+        if (!_isCurrentPlayback(attachment) ||
+            latestMedia == null ||
+            latestMedia.generation != mediaGeneration ||
+            latestMedia.bangumiId != media.bangumiId ||
+            latestMedia.episode != media.episode) {
           return;
         }
       }
+    } else if (connectionState == SyncPlayConnectionState.connected &&
+        syncplayRoom.isNotEmpty &&
+        (syncplayController?.isConnected ?? false)) {
+      // Video-first entry owns the first media publication when the room has
+      // not selected one yet.  RoomPage has no playback binding, so it never
+      // publishes a local URL or source choice here.
+      unawaited(_publishVideoFirstMedia(attachment, _mediaGeneration));
     }
 
     final snapshot = _playbackSnapshot;
@@ -385,6 +421,56 @@ abstract class _PlayerSyncPlayController with Store {
     } else if (!binding.playing) {
       await binding.playFromRoom();
     }
+  }
+
+  Future<void> _publishVideoFirstMedia(
+    SyncPlayPlaybackAttachment attachment,
+    int expectedMediaGeneration,
+  ) async {
+    final client = syncplayController;
+    if (client == null ||
+        !_canPublishVideoFirstMedia(
+          attachment,
+          expectedMediaGeneration,
+          client,
+        )) {
+      return;
+    }
+    final activeClient = client;
+    await _runBestEffortSync(() async {
+      final binding = attachment.binding;
+      await activeClient.setSyncPlayPlaying(
+        SyncPlayMediaCodec.encode(
+          bangumiId: binding.bangumiId,
+          episode: binding.currentEpisode,
+        ),
+        10800,
+        220514438,
+      );
+      if (!_canPublishVideoFirstMedia(
+        attachment,
+        expectedMediaGeneration,
+        activeClient,
+      )) {
+        return;
+      }
+      setCurrentPosition();
+      await activeClient.sendSyncPlaySyncRequest(doSeek: null);
+    });
+  }
+
+  bool _canPublishVideoFirstMedia(
+    SyncPlayPlaybackAttachment attachment,
+    int expectedMediaGeneration,
+    SyncplayClient? client,
+  ) {
+    return client != null &&
+        client.isConnected &&
+        connectionState == SyncPlayConnectionState.connected &&
+        syncplayRoom.isNotEmpty &&
+        currentMedia == null &&
+        _mediaGeneration == expectedMediaGeneration &&
+        _isCurrentPlayback(attachment);
   }
 
   bool _canApplyPlaybackSnapshot(SyncPlayPlaybackAttachment attachment) {
@@ -842,6 +928,21 @@ abstract class _PlayerSyncPlayController with Store {
       beginChatSession(hello.room, preserveHistory: preserveChatHistory);
       syncplayRoom = hello.room;
       connectionState = SyncPlayConnectionState.connected;
+      final binding = _playbackBinding;
+      if (currentMedia == null && binding != null) {
+        // Video-first entry publishes the local media only after the server
+        // has confirmed the room.  A room-first page has no binding and
+        // therefore remains media-free until a member chooses one.
+        unawaited(
+          _publishVideoFirstMedia(
+            SyncPlayPlaybackAttachment(
+              generation: _playbackBindingGeneration,
+              binding: binding,
+            ),
+            _mediaGeneration,
+          ),
+        );
+      }
     } catch (e) {
       KazumiLogger().e('SyncPlay: error', error: e);
       if (!_isCurrentConnection(session, client)) {
@@ -1059,6 +1160,7 @@ abstract class _PlayerSyncPlayController with Store {
           SyncPlayRoomMediaMismatch(
             roomMedia: media,
             localBangumiId: binding.bangumiId,
+            localEpisode: binding.currentEpisode,
           ),
         );
       }
