@@ -5,7 +5,6 @@ import 'package:kazumi/bean/card/bangumi_card.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_picker_controller.dart';
-import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_episode_picker.dart';
 import 'package:kazumi/utils/constants.dart';
 

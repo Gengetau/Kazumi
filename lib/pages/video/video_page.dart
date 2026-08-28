@@ -611,10 +611,9 @@ class _VideoPageState extends State<VideoPage>
       return;
     }
     _isClosing = true;
-    // PR1 keeps the historical VideoPage exit behaviour.  The app-scoped
-    // session itself is not owned by PlayerController, so leave the room
-    // explicitly before removing this route.
-    await roomSession.exitRoom();
+    // VideoPage owns only the temporary playback binding.  The app-scoped
+    // room session must survive navigation so the room, chat and selected
+    // media remain available when the user opens another surface.
     playerController.beginShutdown();
     if (!context.mounted) {
       return;

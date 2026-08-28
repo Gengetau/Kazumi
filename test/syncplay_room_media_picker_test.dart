@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/bangumi/episode_item.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_picker_controller.dart';
-import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
 
 BangumiItem _bangumi(int id, String title) {
   return BangumiItem(
