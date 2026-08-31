@@ -22,10 +22,12 @@ class RoomPlaybackHost extends StatefulWidget {
     super.key,
     required this.args,
     required this.roomSession,
+    this.onClose,
   });
 
   final OnlineVideoPlaybackArgs args;
   final SyncPlayRoomSessionController roomSession;
+  final VoidCallback? onClose;
 
   @override
   State<RoomPlaybackHost> createState() => _RoomPlaybackHostState();
@@ -74,6 +76,7 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
         downloadController: _downloadController,
         roomSession: widget.roomSession,
         embedded: true,
+        onEmbeddedClose: widget.onClose,
       ),
     );
   }

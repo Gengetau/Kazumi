@@ -46,6 +46,7 @@ class VideoPage extends StatefulWidget {
     required this.downloadController,
     required this.roomSession,
     this.embedded = false,
+    this.onEmbeddedClose,
   });
 
   final VideoPlaybackArgs args;
@@ -55,6 +56,7 @@ class VideoPage extends StatefulWidget {
   final DownloadController downloadController;
   final SyncPlayRoomSessionController roomSession;
   final bool embedded;
+  final VoidCallback? onEmbeddedClose;
 
   @override
   State<VideoPage> createState() => _VideoPageState();
@@ -94,7 +96,7 @@ class _VideoPageState extends State<VideoPage>
   StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
   StreamSubscription<SyncPlayRoomMediaEvent>? _syncMediaSubscription;
   StreamSubscription<SyncPlayInvite>? _pendingInviteSubscription;
-  late final Object _chatSurfaceToken;
+  Object? _chatSurfaceToken;
   late final mobx.ReactionDisposer _pipModeListener;
   bool _roomMismatchDialogShown = false;
 
@@ -104,24 +106,30 @@ class _VideoPageState extends State<VideoPage>
   @override
   void initState() {
     super.initState();
-    _chatSurfaceToken = roomSession.registerChatSurface();
+    if (!widget.embedded) {
+      _chatSurfaceToken = roomSession.registerChatSurface();
+    }
     playerController.resetSyncPlayChatEntryPrompt();
     playerController.bindSyncPlayEpisodeChange(_changeEpisodeFromRoom);
     videoPageController.setPlaybackLaunchIntentValidator(
       _isPlaybackLaunchIntentCurrent,
     );
     videoPageController.applyPlaybackArgs(widget.args);
-    windowManager.addListener(this);
-    // Window fullscreen can be changed outside this page through system chrome.
-    videoPageController.isDesktopFullscreen();
+    if (!widget.embedded) {
+      windowManager.addListener(this);
+      // Window fullscreen can be changed outside this page through system chrome.
+      videoPageController.isDesktopFullscreen();
+    }
     tabController = TabController(length: 3, vsync: this);
     tabController.addListener(handleTabChanged);
-    _pendingInviteSubscription =
-        inviteService.pendingStream.listen(_handlePendingInvite);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pending = inviteService.pending;
-      if (pending != null) unawaited(_handlePendingInvite(pending));
-    });
+    if (!widget.embedded) {
+      _pendingInviteSubscription =
+          inviteService.pendingStream.listen(_handlePendingInvite);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final pending = inviteService.pending;
+        if (pending != null) unawaited(_handlePendingInvite(pending));
+      });
+    }
     observerController = GridObserverController(controller: scrollController);
     animation = AnimationController(
       duration: _sideTabAnimationDuration,
@@ -152,9 +160,11 @@ class _VideoPageState extends State<VideoPage>
         syncChatVisibility();
       },
     );
-    _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
-    _syncMediaSubscription =
-        roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+    if (!widget.embedded) {
+      _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
+      _syncMediaSubscription =
+          roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+    }
   }
 
   bool _isPlaybackLaunchIntentCurrent() {
@@ -270,7 +280,7 @@ class _VideoPageState extends State<VideoPage>
   /// picture state, and they arrive over different channels in either order, so
   /// it settles on both. A picture in picture window is not an orientation.
   void _syncFullscreenWithWindowShape() {
-    if (isDesktop() || videoPageController.isPip) {
+    if (widget.embedded || isDesktop() || videoPageController.isPip) {
       return;
     }
     final bool landscape = _windowIsLandscape;
@@ -396,7 +406,10 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     _pipModeListener();
     tabController.removeListener(handleTabChanged);
-    roomSession.unregisterChatSurface(_chatSurfaceToken);
+    final chatSurfaceToken = _chatSurfaceToken;
+    if (chatSurfaceToken != null) {
+      roomSession.unregisterChatSurface(chatSurfaceToken);
+    }
     // Cancellation and log-stream teardown happen in VideoPageController's
     // own dispose when Modular releases the route scope.
     if (!isDesktop()) {
@@ -425,6 +438,9 @@ class _VideoPageState extends State<VideoPage>
   }
 
   void openSyncPlayChat() {
+    if (widget.embedded) {
+      return;
+    }
     unawaited(_openSyncPlayChat(forcePrompt: true));
   }
 
@@ -497,12 +513,16 @@ class _VideoPageState extends State<VideoPage>
     if (!mounted) {
       return;
     }
+    final chatSurfaceToken = _chatSurfaceToken;
+    if (chatSurfaceToken == null) {
+      return;
+    }
     final bool chatTabVisible = tabController.index == 2;
     final bool contentVisible = _isSideTabLayout
         ? videoPageController.showTabBody && _tabBodyTargetVisible
         : videoPageController.showTabBody && !videoPageController.isFullscreen;
     roomSession.setChatSurfaceVisible(
-      _chatSurfaceToken,
+      chatSurfaceToken,
       chatTabVisible && contentVisible && !videoPageController.isPip,
     );
   }
@@ -718,6 +738,10 @@ class _VideoPageState extends State<VideoPage>
   }
 
   void onBackPressed(BuildContext context) async {
+    if (widget.embedded) {
+      widget.onEmbeddedClose?.call();
+      return;
+    }
     if (KazumiDialog.observer.hasKazumiDialog) {
       KazumiDialog.dismiss();
       return;

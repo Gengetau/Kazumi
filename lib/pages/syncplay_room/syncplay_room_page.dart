@@ -70,6 +70,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   bool _mediaInfoLoading = false;
   String? _mediaInfoError;
   OnlineVideoPlaybackArgs? _playbackArgs;
+  bool _sourceSheetOpen = false;
+  String? _playbackSelectionError;
 
   @override
   void initState() {
@@ -119,7 +121,10 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       if (playbackBangumiId != null &&
           playbackBangumiId != event.media.bangumiId &&
           mounted) {
-        setState(() => _playbackArgs = null);
+        setState(() {
+          _playbackArgs = null;
+          _playbackSelectionError = null;
+        });
       }
       unawaited(_loadMediaInfo(event.media));
     }
@@ -239,7 +244,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   Future<void> _choosePlaybackSource() async {
     final media = roomSession.currentMedia;
     final bangumi = _mediaInfoBangumi;
-    if (media == null || bangumi == null) {
+    if (media == null || bangumi == null || _sourceSheetOpen) {
       return;
     }
     final launchIntent = SyncPlayPlaybackLaunchIntent(
@@ -257,27 +262,43 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     }
     final infoController = InfoController(inject<CollectController>())
       ..bangumiItem = bangumi;
-    final result = await showAdaptiveBottomSheet<OnlineVideoPlaybackArgs>(
-      context: context,
-      maxHeightFactor: 0.85,
-      compactLandscapeMaxHeightFactor: 0.95,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      builder: (context) => SourceSheet(
-        infoController: infoController,
-        playbackLaunchIntent: launchIntent,
-        returnPlaybackArgs: true,
-      ),
-    );
-    if (!mounted || result == null) {
-      return;
+    OnlineVideoPlaybackArgs? selectedArgs;
+    setState(() {
+      _sourceSheetOpen = true;
+      _playbackSelectionError = null;
+    });
+    try {
+      await showAdaptiveBottomSheet<void>(
+        context: context,
+        maxHeightFactor: 0.85,
+        compactLandscapeMaxHeightFactor: 0.95,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        builder: (sheetContext) => SourceSheet(
+          infoController: infoController,
+          playbackLaunchIntent: launchIntent,
+          onPlaybackSelected: (args) {
+            selectedArgs = args;
+            Navigator.of(sheetContext).pop();
+          },
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _sourceSheetOpen = false);
+      }
     }
+    if (!mounted || selectedArgs == null) return;
     if (!roomSession.isPlaybackLaunchIntentCurrent(launchIntent)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('房间媒体已经更新，请重新选择播放源')),
       );
+      setState(() => _playbackSelectionError = '房间媒体已更新，请重新选择播放源');
       return;
     }
-    setState(() => _playbackArgs = result);
+    setState(() {
+      _playbackArgs = selectedArgs;
+      _playbackSelectionError = null;
+    });
   }
 
   Future<void> _joinClipboardInvite(SyncPlayInvite invite) async {
@@ -653,6 +674,20 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     final playbackArgs = _playbackArgs;
     final hasEmbeddedPlayback =
         playbackArgs != null && playbackArgs.bangumiItem.id == media.bangumiId;
+    final playbackStateLabel = switch ((
+      _mediaInfoLoading,
+      _mediaInfoError,
+      _sourceSheetOpen,
+      hasEmbeddedPlayback,
+      _playbackSelectionError,
+    )) {
+      (true, _, _, _, _) => '正在解析房间媒体',
+      (_, String(), _, _, _) => '房间媒体解析失败',
+      (_, _, true, _, _) => '正在选择播放源',
+      (_, _, _, true, _) => '播放就绪',
+      (_, _, _, _, String()) => '播放源需要重新选择',
+      _ => '等待选择播放源',
+    };
     final leading = imageUrl.isEmpty
         ? CircleAvatar(child: Text('${media.bangumiId}'))
         : SizedBox(
@@ -672,6 +707,29 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           children: [
             Text('当前观看', style: theme.textTheme.titleMedium),
             const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(
+                  hasEmbeddedPlayback
+                      ? Icons.play_circle_fill_rounded
+                      : Icons.pending_outlined,
+                  size: 18,
+                  color: hasEmbeddedPlayback
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  playbackStateLabel,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: hasEmbeddedPlayback
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             if (hasEmbeddedPlayback) ...[
               RoomPlaybackHost(
                 key: ValueKey(
@@ -679,6 +737,10 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 ),
                 args: playbackArgs,
                 roomSession: roomSession,
+                onClose: () {
+                  if (!mounted) return;
+                  setState(() => _playbackArgs = null);
+                },
               ),
               const SizedBox(height: 10),
             ],
@@ -710,6 +772,16 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                   ),
                 ],
               ),
+            if (_playbackSelectionError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _playbackSelectionError!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.error,
+                  ),
+                ),
+              ),
             const SizedBox(height: 4),
             Row(
               children: [
@@ -724,10 +796,18 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _mediaInfoBangumi == null || _mediaInfoLoading
+                    onPressed: _mediaInfoBangumi == null ||
+                            _mediaInfoLoading ||
+                            _sourceSheetOpen
                         ? null
                         : _choosePlaybackSource,
-                    child: Text(hasEmbeddedPlayback ? '更换播放源' : '选择播放源'),
+                    child: Text(
+                      _sourceSheetOpen
+                          ? '选择中…'
+                          : hasEmbeddedPlayback
+                              ? '更换播放源'
+                              : '选择播放源',
+                    ),
                   ),
                 ),
               ],
@@ -746,45 +826,65 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   }) {
     final connected =
         state == SyncPlayConnectionState.connected && room.isNotEmpty;
-    return Column(
-      children: [
-        Flexible(
-          fit: FlexFit.loose,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (!connected)
-                  SyncPlayRoomHome(
-                    controller: roomSession,
-                    onCreateRoom: () => unawaited(_showCreateForm()),
-                    onJoinRoom: () => unawaited(_showJoinForm()),
-                    onServerSettings: () => unawaited(_showServerForm()),
-                    onRetry: roomSession.retryConnection,
-                    inviteTextBuilder: roomSession.syncPlayInviteText,
-                    enableClipboardJoin: true,
-                    onClipboardInviteAccepted: _joinClipboardInvite,
-                  )
-                else
-                  _buildMediaCard(context, media),
-              ],
+    final chat = SyncPlayChatView(
+      controller: roomSession,
+      onSend: roomSession.trySendChatMessage,
+      inviteTextBuilder: roomSession.syncPlayInviteText,
+      compact: true,
+      onReconnect: roomSession.retryConnection,
+      onClearHistory: roomSession.clearChatHistory,
+      onJoinRoom: () => unawaited(_showJoinForm()),
+    );
+    if (!connected) {
+      return Column(
+        children: [
+          Flexible(
+            fit: FlexFit.loose,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: SyncPlayRoomHome(
+                controller: roomSession,
+                onCreateRoom: () => unawaited(_showCreateForm()),
+                onJoinRoom: () => unawaited(_showJoinForm()),
+                onServerSettings: () => unawaited(_showServerForm()),
+                onRetry: roomSession.retryConnection,
+                inviteTextBuilder: roomSession.syncPlayInviteText,
+                enableClipboardJoin: true,
+                onClipboardInviteAccepted: _joinClipboardInvite,
+              ),
             ),
           ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: SyncPlayChatView(
-            controller: roomSession,
-            onSend: roomSession.trySendChatMessage,
-            inviteTextBuilder: roomSession.syncPlayInviteText,
-            compact: true,
-            onReconnect: roomSession.retryConnection,
-            onClearHistory: roomSession.clearChatHistory,
-            onJoinRoom: () => unawaited(_showJoinForm()),
-          ),
-        ),
-      ],
+          const Divider(height: 1),
+          Expanded(child: chat),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final sideBySide = constraints.maxWidth >= 800 &&
+            constraints.maxWidth > constraints.maxHeight;
+        final mediaPane = SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: _buildMediaCard(context, media),
+        );
+        if (sideBySide) {
+          return Row(
+            children: [
+              Expanded(flex: 3, child: mediaPane),
+              const VerticalDivider(width: 1),
+              Expanded(flex: 2, child: chat),
+            ],
+          );
+        }
+        return Column(
+          children: [
+            Flexible(fit: FlexFit.loose, child: mediaPane),
+            const Divider(height: 1),
+            Expanded(child: chat),
+          ],
+        );
+      },
     );
   }
 

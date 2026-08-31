@@ -25,12 +25,12 @@ class SourceSheet extends StatefulWidget {
     super.key,
     required this.infoController,
     this.playbackLaunchIntent,
-    this.returnPlaybackArgs = false,
+    this.onPlaybackSelected,
   });
 
   final InfoController infoController;
   final SyncPlayPlaybackLaunchIntent? playbackLaunchIntent;
-  final bool returnPlaybackArgs;
+  final ValueChanged<OnlineVideoPlaybackArgs>? onPlaybackSelected;
 
   @override
   State<SourceSheet> createState() => _SourceSheetState();
@@ -170,8 +170,9 @@ class _SourceSheetState extends State<SourceSheet> {
         roads: roads,
         launchIntent: widget.playbackLaunchIntent,
       );
-      if (widget.returnPlaybackArgs) {
-        Navigator.of(context).pop(playbackArgs);
+      final onPlaybackSelected = widget.onPlaybackSelected;
+      if (onPlaybackSelected != null) {
+        onPlaybackSelected(playbackArgs);
         return;
       }
       context.pushNamed('/video/', arguments: playbackArgs);
