@@ -198,9 +198,10 @@ void main() {
     await _pumpRoomPage(tester, session);
 
     expect(find.text('房间 room-a'), findsWidgets);
-    expect(find.text('房主控制 · 1 位主持人'), findsWidgets);
-    expect(find.text('host'), findsOneWidget);
-    expect(find.text('server-alice（你）'), findsOneWidget);
+    expect(find.textContaining('房主控制'), findsWidgets);
+    expect(find.text('同步服务器'), findsNothing);
+    expect(find.text('分享房间号，好友即可加入'), findsNothing);
+    expect(find.text('当前观看'), findsOneWidget);
     expect(find.text('等待主持人选择'), findsOneWidget);
     expect(session.canSelectRoomMedia, isFalse);
 

@@ -45,6 +45,7 @@ class VideoPage extends StatefulWidget {
     required this.historyController,
     required this.downloadController,
     required this.roomSession,
+    this.embedded = false,
   });
 
   final VideoPlaybackArgs args;
@@ -53,6 +54,7 @@ class VideoPage extends StatefulWidget {
   final HistoryController historyController;
   final DownloadController downloadController;
   final SyncPlayRoomSessionController roomSession;
+  final bool embedded;
 
   @override
   State<VideoPage> createState() => _VideoPageState();
@@ -736,6 +738,9 @@ class _VideoPageState extends State<VideoPage>
       await DisplayModeService.exitFullScreen();
       videoPageController.isFullscreen = false;
     }
+    if (widget.embedded) {
+      return;
+    }
     if (_isClosing) {
       return;
     }
@@ -816,6 +821,21 @@ class _VideoPageState extends State<VideoPage>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      return Observer(
+        builder: (context) => AspectRatio(
+          aspectRatio: 16 / 9,
+          child: ColoredBox(
+            color: Colors.black,
+            child: Focus(
+              focusNode: keyboardFocus,
+              autofocus: false,
+              child: playerBody,
+            ),
+          ),
+        ),
+      );
+    }
     final bool isLandscape = _windowIsLandscape;
     _syncFullscreenWithWindowShape();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1019,65 +1039,67 @@ class _VideoPageState extends State<VideoPage>
                   ),
                 ),
               ),
-              Stack(
-                children: [
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: EmbeddedNativeControlArea(
-                      requireOffset: !videoPageController.isFullscreen,
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back,
-                                color: Colors.white),
-                            onPressed: () => onBackPressed(context),
-                          ),
-                          const Expanded(
-                              child: dtb.DragToMoveArea(
-                                  child: SizedBox(height: 40))),
-                          IconButton(
-                            icon: const Icon(Icons.refresh_outlined,
-                                color: Colors.white),
-                            onPressed: () {
-                              changeEpisode(
+              if (!widget.embedded)
+                Stack(
+                  children: [
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: EmbeddedNativeControlArea(
+                        requireOffset: !videoPageController.isFullscreen,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.arrow_back,
+                                  color: Colors.white),
+                              onPressed: () => onBackPressed(context),
+                            ),
+                            const Expanded(
+                                child: dtb.DragToMoveArea(
+                                    child: SizedBox(height: 40))),
+                            IconButton(
+                              icon: const Icon(Icons.refresh_outlined,
+                                  color: Colors.white),
+                              onPressed: () {
+                                changeEpisode(
                                   videoPageController.selectedEpisode.episode,
                                   currentRoad:
-                                      videoPageController.selectedEpisode.road);
-                            },
-                          ),
-                          Visibility(
-                            visible: MediaQuery.sizeOf(context).width >
-                                MediaQuery.sizeOf(context).height,
-                            child: IconButton(
-                              onPressed: () {
-                                _toggleTabBodyAnimated();
+                                      videoPageController.selectedEpisode.road,
+                                );
                               },
-                              icon: Icon(
-                                _tabBodyTargetVisible
-                                    ? Icons.menu_open
-                                    : Icons.menu_open_outlined,
-                                color: Colors.white,
+                            ),
+                            Visibility(
+                              visible: MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height,
+                              child: IconButton(
+                                onPressed: () {
+                                  _toggleTabBodyAnimated();
+                                },
+                                icon: Icon(
+                                  _tabBodyTargetVisible
+                                      ? Icons.menu_open
+                                      : Icons.menu_open_outlined,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                                showDebugLog
-                                    ? Icons.bug_report
-                                    : Icons.bug_report_outlined,
-                                color: Colors.white),
-                            onPressed: () {
-                              switchDebugConsole();
-                            },
-                          ),
-                        ],
+                            IconButton(
+                              icon: Icon(
+                                  showDebugLog
+                                      ? Icons.bug_report
+                                      : Icons.bug_report_outlined,
+                                  color: Colors.white),
+                              onPressed: () {
+                                switchDebugConsole();
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
             ],
           ),
         ),

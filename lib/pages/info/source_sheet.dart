@@ -25,10 +25,12 @@ class SourceSheet extends StatefulWidget {
     super.key,
     required this.infoController,
     this.playbackLaunchIntent,
+    this.returnPlaybackArgs = false,
   });
 
   final InfoController infoController;
   final SyncPlayPlaybackLaunchIntent? playbackLaunchIntent;
+  final bool returnPlaybackArgs;
 
   @override
   State<SourceSheet> createState() => _SourceSheetState();
@@ -160,17 +162,19 @@ class _SourceSheetState extends State<SourceSheet> {
       }
       KazumiDialog.dismiss();
       if (!mounted) return;
-      context.pushNamed(
-        '/video/',
-        arguments: OnlineVideoPlaybackArgs(
-          bangumiItem: widget.infoController.bangumiItem,
-          plugin: plugin,
-          title: searchItem.name,
-          src: searchItem.src,
-          roads: roads,
-          launchIntent: widget.playbackLaunchIntent,
-        ),
+      final playbackArgs = OnlineVideoPlaybackArgs(
+        bangumiItem: widget.infoController.bangumiItem,
+        plugin: plugin,
+        title: searchItem.name,
+        src: searchItem.src,
+        roads: roads,
+        launchIntent: widget.playbackLaunchIntent,
       );
+      if (widget.returnPlaybackArgs) {
+        Navigator.of(context).pop(playbackArgs);
+        return;
+      }
+      context.pushNamed('/video/', arguments: playbackArgs);
     } catch (_) {
       KazumiLogger().w("PluginSearchService: failed to query video playlist");
       KazumiDialog.dismiss();
