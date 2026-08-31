@@ -8,11 +8,14 @@ import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/navigation.dart';
-import 'package:kazumi/pages/info/info_route_args.dart';
+import 'package:kazumi/pages/collect/collect_controller.dart';
+import 'package:kazumi/pages/info/info_controller.dart';
+import 'package:kazumi/pages/info/source_sheet.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/pages/player/syncplay_sheet.dart';
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
+import 'package:kazumi/pages/syncplay_room/room_playback_host.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
@@ -66,6 +69,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   int? _mediaInfoGeneration;
   bool _mediaInfoLoading = false;
   String? _mediaInfoError;
+  OnlineVideoPlaybackArgs? _playbackArgs;
+  bool _sourceSheetOpen = false;
+  String? _playbackSelectionError;
 
   @override
   void initState() {
@@ -111,6 +117,15 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
 
   void _onMediaEvent(SyncPlayRoomMediaEvent event) {
     if (event is SyncPlayRoomMediaChanged) {
+      final playbackBangumiId = _playbackArgs?.bangumiItem.id;
+      if (playbackBangumiId != null &&
+          playbackBangumiId != event.media.bangumiId &&
+          mounted) {
+        setState(() {
+          _playbackArgs = null;
+          _playbackSelectionError = null;
+        });
+      }
       unawaited(_loadMediaInfo(event.media));
     }
   }
@@ -218,15 +233,18 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         media.bangumiId == selection.bangumi.id &&
         media.episode == selection.episode) {
       _cacheSelectedMedia(selection, media);
+      if (_playbackArgs?.bangumiItem.id != selection.bangumi.id) {
+        await _choosePlaybackSource();
+      }
     } else if (media != null) {
       unawaited(_loadMediaInfo(media, force: true));
     }
   }
 
-  Future<void> _enterPlayback() async {
+  Future<void> _choosePlaybackSource() async {
     final media = roomSession.currentMedia;
     final bangumi = _mediaInfoBangumi;
-    if (media == null || bangumi == null) {
+    if (media == null || bangumi == null || _sourceSheetOpen) {
       return;
     }
     final launchIntent = SyncPlayPlaybackLaunchIntent(
@@ -242,13 +260,45 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       }
       return;
     }
-    await context.pushNamed(
-      '/info/',
-      arguments: InfoPageRouteArgs(
-        bangumiItem: bangumi,
-        playbackLaunchIntent: launchIntent,
-      ),
-    );
+    final infoController = InfoController(inject<CollectController>())
+      ..bangumiItem = bangumi;
+    OnlineVideoPlaybackArgs? selectedArgs;
+    setState(() {
+      _sourceSheetOpen = true;
+      _playbackSelectionError = null;
+    });
+    try {
+      await showAdaptiveBottomSheet<void>(
+        context: context,
+        maxHeightFactor: 0.85,
+        compactLandscapeMaxHeightFactor: 0.95,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        builder: (sheetContext) => SourceSheet(
+          infoController: infoController,
+          playbackLaunchIntent: launchIntent,
+          onPlaybackSelected: (args) {
+            selectedArgs = args;
+            Navigator.of(sheetContext).pop();
+          },
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _sourceSheetOpen = false);
+      }
+    }
+    if (!mounted || selectedArgs == null) return;
+    if (!roomSession.isPlaybackLaunchIntentCurrent(launchIntent)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('房间媒体已经更新，请重新选择播放源')),
+      );
+      setState(() => _playbackSelectionError = '房间媒体已更新，请重新选择播放源');
+      return;
+    }
+    setState(() {
+      _playbackArgs = selectedArgs;
+      _playbackSelectionError = null;
+    });
   }
 
   Future<void> _joinClipboardInvite(SyncPlayInvite invite) async {
@@ -310,94 +360,6 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       return operatorCount == 1 ? '房主控制 · 你是主持人' : '房主控制 · $operatorCount 位主持人';
     }
     return '房主控制 · $operatorCount 位主持人';
-  }
-
-  Widget _buildRoomControlCard(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final users = roomSession.roomUsers.values.toList()
-      ..sort((a, b) {
-        if (a.isController != b.isController) {
-          return a.isController ? -1 : 1;
-        }
-        return a.username.compareTo(b.username);
-      });
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  roomSession.isManagedRoom
-                      ? Icons.lock_person_rounded
-                      : Icons.groups_rounded,
-                  color: roomSession.isManagedRoom
-                      ? colorScheme.primary
-                      : colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _roomControlLabel(),
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (users.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final user in users)
-                    Tooltip(
-                      message: user.isController ? '主持人' : '成员',
-                      child: Chip(
-                        avatar: Icon(
-                          user.isController
-                              ? Icons.workspace_premium_rounded
-                              : Icons.person_outline_rounded,
-                          size: 18,
-                        ),
-                        label: Text(
-                          user.username == roomSession.confirmedUsername
-                              ? '${user.username}（你）'
-                              : user.username,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ] else if (roomSession.isManagedRoom) ...[
-              const SizedBox(height: 8),
-              Text(
-                '正在获取房间成员与主持状态',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-            if (roomSession.isManagedRoom && !roomSession.isRoomOperator) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: _showOperatorAuthentication,
-                  icon: const Icon(Icons.key_rounded),
-                  label: const Text('输入主持密码'),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
   }
 
   Future<void> _showCreateForm() async {
@@ -709,6 +671,23 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 ? bangumi.name.trim()
                 : 'Bangumi #${media.bangumiId}'));
     final imageUrl = bangumi?.images['large'] ?? '';
+    final playbackArgs = _playbackArgs;
+    final hasEmbeddedPlayback =
+        playbackArgs != null && playbackArgs.bangumiItem.id == media.bangumiId;
+    final playbackStateLabel = switch ((
+      _mediaInfoLoading,
+      _mediaInfoError,
+      _sourceSheetOpen,
+      hasEmbeddedPlayback,
+      _playbackSelectionError,
+    )) {
+      (true, _, _, _, _) => '正在解析房间媒体',
+      (_, String(), _, _, _) => '房间媒体解析失败',
+      (_, _, true, _, _) => '正在选择播放源',
+      (_, _, _, true, _) => '播放就绪',
+      (_, _, _, _, String()) => '播放源需要重新选择',
+      _ => '等待选择播放源',
+    };
     final leading = imageUrl.isEmpty
         ? CircleAvatar(child: Text('${media.bangumiId}'))
         : SizedBox(
@@ -728,6 +707,43 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           children: [
             Text('当前观看', style: theme.textTheme.titleMedium),
             const SizedBox(height: 10),
+            Row(
+              children: [
+                Icon(
+                  hasEmbeddedPlayback
+                      ? Icons.play_circle_fill_rounded
+                      : Icons.pending_outlined,
+                  size: 18,
+                  color: hasEmbeddedPlayback
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  playbackStateLabel,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: hasEmbeddedPlayback
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (hasEmbeddedPlayback) ...[
+              RoomPlaybackHost(
+                key: ValueKey(
+                  '${playbackArgs.plugin.name}:${playbackArgs.src}:${playbackArgs.bangumiItem.id}',
+                ),
+                args: playbackArgs,
+                roomSession: roomSession,
+                onClose: () {
+                  if (!mounted) return;
+                  setState(() => _playbackArgs = null);
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: leading,
@@ -756,6 +772,16 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                   ),
                 ],
               ),
+            if (_playbackSelectionError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _playbackSelectionError!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.error,
+                  ),
+                ),
+              ),
             const SizedBox(height: 4),
             Row(
               children: [
@@ -770,10 +796,18 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _mediaInfoBangumi == null || _mediaInfoLoading
+                    onPressed: _mediaInfoBangumi == null ||
+                            _mediaInfoLoading ||
+                            _sourceSheetOpen
                         ? null
-                        : _enterPlayback,
-                    child: const Text('进入播放'),
+                        : _choosePlaybackSource,
+                    child: Text(
+                      _sourceSheetOpen
+                          ? '选择中…'
+                          : hasEmbeddedPlayback
+                              ? '更换播放源'
+                              : '选择播放源',
+                    ),
                   ),
                 ),
               ],
@@ -792,48 +826,65 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   }) {
     final connected =
         state == SyncPlayConnectionState.connected && room.isNotEmpty;
-    return Column(
-      children: [
-        Flexible(
-          fit: FlexFit.loose,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SyncPlayRoomHome(
-                  controller: roomSession,
-                  onCreateRoom: () => unawaited(_showCreateForm()),
-                  onJoinRoom: () => unawaited(_showJoinForm()),
-                  onServerSettings: () => unawaited(_showServerForm()),
-                  onRetry: roomSession.retryConnection,
-                  inviteTextBuilder: roomSession.syncPlayInviteText,
-                  enableClipboardJoin: true,
-                  onClipboardInviteAccepted: _joinClipboardInvite,
-                ),
-                if (connected) ...[
-                  const SizedBox(height: 12),
-                  _buildRoomControlCard(context),
-                  const SizedBox(height: 12),
-                  _buildMediaCard(context, media),
-                ],
-              ],
+    final chat = SyncPlayChatView(
+      controller: roomSession,
+      onSend: roomSession.trySendChatMessage,
+      inviteTextBuilder: roomSession.syncPlayInviteText,
+      compact: true,
+      onReconnect: roomSession.retryConnection,
+      onClearHistory: roomSession.clearChatHistory,
+      onJoinRoom: () => unawaited(_showJoinForm()),
+    );
+    if (!connected) {
+      return Column(
+        children: [
+          Flexible(
+            fit: FlexFit.loose,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: SyncPlayRoomHome(
+                controller: roomSession,
+                onCreateRoom: () => unawaited(_showCreateForm()),
+                onJoinRoom: () => unawaited(_showJoinForm()),
+                onServerSettings: () => unawaited(_showServerForm()),
+                onRetry: roomSession.retryConnection,
+                inviteTextBuilder: roomSession.syncPlayInviteText,
+                enableClipboardJoin: true,
+                onClipboardInviteAccepted: _joinClipboardInvite,
+              ),
             ),
           ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: SyncPlayChatView(
-            controller: roomSession,
-            onSend: roomSession.trySendChatMessage,
-            inviteTextBuilder: roomSession.syncPlayInviteText,
-            compact: true,
-            onReconnect: roomSession.retryConnection,
-            onClearHistory: roomSession.clearChatHistory,
-            onJoinRoom: () => unawaited(_showJoinForm()),
-          ),
-        ),
-      ],
+          const Divider(height: 1),
+          Expanded(child: chat),
+        ],
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final sideBySide = constraints.maxWidth >= 800 &&
+            constraints.maxWidth > constraints.maxHeight;
+        final mediaPane = SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: _buildMediaCard(context, media),
+        );
+        if (sideBySide) {
+          return Row(
+            children: [
+              Expanded(flex: 3, child: mediaPane),
+              const VerticalDivider(width: 1),
+              Expanded(flex: 2, child: chat),
+            ],
+          );
+        }
+        return Column(
+          children: [
+            Flexible(fit: FlexFit.loose, child: mediaPane),
+            const Divider(height: 1),
+            Expanded(child: chat),
+          ],
+        );
+      },
     );
   }
 

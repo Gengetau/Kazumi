@@ -45,6 +45,8 @@ class VideoPage extends StatefulWidget {
     required this.historyController,
     required this.downloadController,
     required this.roomSession,
+    this.embedded = false,
+    this.onEmbeddedClose,
   });
 
   final VideoPlaybackArgs args;
@@ -53,6 +55,8 @@ class VideoPage extends StatefulWidget {
   final HistoryController historyController;
   final DownloadController downloadController;
   final SyncPlayRoomSessionController roomSession;
+  final bool embedded;
+  final VoidCallback? onEmbeddedClose;
 
   @override
   State<VideoPage> createState() => _VideoPageState();
@@ -92,7 +96,7 @@ class _VideoPageState extends State<VideoPage>
   StreamSubscription<SyncPlayRoomNotice>? _syncNoticeSubscription;
   StreamSubscription<SyncPlayRoomMediaEvent>? _syncMediaSubscription;
   StreamSubscription<SyncPlayInvite>? _pendingInviteSubscription;
-  late final Object _chatSurfaceToken;
+  Object? _chatSurfaceToken;
   late final mobx.ReactionDisposer _pipModeListener;
   bool _roomMismatchDialogShown = false;
 
@@ -102,24 +106,30 @@ class _VideoPageState extends State<VideoPage>
   @override
   void initState() {
     super.initState();
-    _chatSurfaceToken = roomSession.registerChatSurface();
+    if (!widget.embedded) {
+      _chatSurfaceToken = roomSession.registerChatSurface();
+    }
     playerController.resetSyncPlayChatEntryPrompt();
     playerController.bindSyncPlayEpisodeChange(_changeEpisodeFromRoom);
     videoPageController.setPlaybackLaunchIntentValidator(
       _isPlaybackLaunchIntentCurrent,
     );
     videoPageController.applyPlaybackArgs(widget.args);
-    windowManager.addListener(this);
-    // Window fullscreen can be changed outside this page through system chrome.
-    videoPageController.isDesktopFullscreen();
+    if (!widget.embedded) {
+      windowManager.addListener(this);
+      // Window fullscreen can be changed outside this page through system chrome.
+      videoPageController.isDesktopFullscreen();
+    }
     tabController = TabController(length: 3, vsync: this);
     tabController.addListener(handleTabChanged);
-    _pendingInviteSubscription =
-        inviteService.pendingStream.listen(_handlePendingInvite);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pending = inviteService.pending;
-      if (pending != null) unawaited(_handlePendingInvite(pending));
-    });
+    if (!widget.embedded) {
+      _pendingInviteSubscription =
+          inviteService.pendingStream.listen(_handlePendingInvite);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final pending = inviteService.pending;
+        if (pending != null) unawaited(_handlePendingInvite(pending));
+      });
+    }
     observerController = GridObserverController(controller: scrollController);
     animation = AnimationController(
       duration: _sideTabAnimationDuration,
@@ -150,9 +160,11 @@ class _VideoPageState extends State<VideoPage>
         syncChatVisibility();
       },
     );
-    _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
-    _syncMediaSubscription =
-        roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+    if (!widget.embedded) {
+      _syncNoticeSubscription = roomSession.notices.listen(_handleRoomNotice);
+      _syncMediaSubscription =
+          roomSession.mediaEvents.listen(_handleRoomMediaEvent);
+    }
   }
 
   bool _isPlaybackLaunchIntentCurrent() {
@@ -268,7 +280,7 @@ class _VideoPageState extends State<VideoPage>
   /// picture state, and they arrive over different channels in either order, so
   /// it settles on both. A picture in picture window is not an orientation.
   void _syncFullscreenWithWindowShape() {
-    if (isDesktop() || videoPageController.isPip) {
+    if (widget.embedded || isDesktop() || videoPageController.isPip) {
       return;
     }
     final bool landscape = _windowIsLandscape;
@@ -394,7 +406,10 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     _pipModeListener();
     tabController.removeListener(handleTabChanged);
-    roomSession.unregisterChatSurface(_chatSurfaceToken);
+    final chatSurfaceToken = _chatSurfaceToken;
+    if (chatSurfaceToken != null) {
+      roomSession.unregisterChatSurface(chatSurfaceToken);
+    }
     // Cancellation and log-stream teardown happen in VideoPageController's
     // own dispose when Modular releases the route scope.
     if (!isDesktop()) {
@@ -423,6 +438,9 @@ class _VideoPageState extends State<VideoPage>
   }
 
   void openSyncPlayChat() {
+    if (widget.embedded) {
+      return;
+    }
     unawaited(_openSyncPlayChat(forcePrompt: true));
   }
 
@@ -495,12 +513,16 @@ class _VideoPageState extends State<VideoPage>
     if (!mounted) {
       return;
     }
+    final chatSurfaceToken = _chatSurfaceToken;
+    if (chatSurfaceToken == null) {
+      return;
+    }
     final bool chatTabVisible = tabController.index == 2;
     final bool contentVisible = _isSideTabLayout
         ? videoPageController.showTabBody && _tabBodyTargetVisible
         : videoPageController.showTabBody && !videoPageController.isFullscreen;
     roomSession.setChatSurfaceVisible(
-      _chatSurfaceToken,
+      chatSurfaceToken,
       chatTabVisible && contentVisible && !videoPageController.isPip,
     );
   }
@@ -716,6 +738,10 @@ class _VideoPageState extends State<VideoPage>
   }
 
   void onBackPressed(BuildContext context) async {
+    if (widget.embedded) {
+      widget.onEmbeddedClose?.call();
+      return;
+    }
     if (KazumiDialog.observer.hasKazumiDialog) {
       KazumiDialog.dismiss();
       return;
@@ -735,6 +761,9 @@ class _VideoPageState extends State<VideoPage>
     if (videoPageController.isFullscreen) {
       await DisplayModeService.exitFullScreen();
       videoPageController.isFullscreen = false;
+    }
+    if (widget.embedded) {
+      return;
     }
     if (_isClosing) {
       return;
@@ -816,6 +845,21 @@ class _VideoPageState extends State<VideoPage>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      return Observer(
+        builder: (context) => AspectRatio(
+          aspectRatio: 16 / 9,
+          child: ColoredBox(
+            color: Colors.black,
+            child: Focus(
+              focusNode: keyboardFocus,
+              autofocus: false,
+              child: playerBody,
+            ),
+          ),
+        ),
+      );
+    }
     final bool isLandscape = _windowIsLandscape;
     _syncFullscreenWithWindowShape();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1019,65 +1063,67 @@ class _VideoPageState extends State<VideoPage>
                   ),
                 ),
               ),
-              Stack(
-                children: [
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: EmbeddedNativeControlArea(
-                      requireOffset: !videoPageController.isFullscreen,
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back,
-                                color: Colors.white),
-                            onPressed: () => onBackPressed(context),
-                          ),
-                          const Expanded(
-                              child: dtb.DragToMoveArea(
-                                  child: SizedBox(height: 40))),
-                          IconButton(
-                            icon: const Icon(Icons.refresh_outlined,
-                                color: Colors.white),
-                            onPressed: () {
-                              changeEpisode(
+              if (!widget.embedded)
+                Stack(
+                  children: [
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: EmbeddedNativeControlArea(
+                        requireOffset: !videoPageController.isFullscreen,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.arrow_back,
+                                  color: Colors.white),
+                              onPressed: () => onBackPressed(context),
+                            ),
+                            const Expanded(
+                                child: dtb.DragToMoveArea(
+                                    child: SizedBox(height: 40))),
+                            IconButton(
+                              icon: const Icon(Icons.refresh_outlined,
+                                  color: Colors.white),
+                              onPressed: () {
+                                changeEpisode(
                                   videoPageController.selectedEpisode.episode,
                                   currentRoad:
-                                      videoPageController.selectedEpisode.road);
-                            },
-                          ),
-                          Visibility(
-                            visible: MediaQuery.sizeOf(context).width >
-                                MediaQuery.sizeOf(context).height,
-                            child: IconButton(
-                              onPressed: () {
-                                _toggleTabBodyAnimated();
+                                      videoPageController.selectedEpisode.road,
+                                );
                               },
-                              icon: Icon(
-                                _tabBodyTargetVisible
-                                    ? Icons.menu_open
-                                    : Icons.menu_open_outlined,
-                                color: Colors.white,
+                            ),
+                            Visibility(
+                              visible: MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height,
+                              child: IconButton(
+                                onPressed: () {
+                                  _toggleTabBodyAnimated();
+                                },
+                                icon: Icon(
+                                  _tabBodyTargetVisible
+                                      ? Icons.menu_open
+                                      : Icons.menu_open_outlined,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                                showDebugLog
-                                    ? Icons.bug_report
-                                    : Icons.bug_report_outlined,
-                                color: Colors.white),
-                            onPressed: () {
-                              switchDebugConsole();
-                            },
-                          ),
-                        ],
+                            IconButton(
+                              icon: Icon(
+                                  showDebugLog
+                                      ? Icons.bug_report
+                                      : Icons.bug_report_outlined,
+                                  color: Colors.white),
+                              onPressed: () {
+                                switchDebugConsole();
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
             ],
           ),
         ),
