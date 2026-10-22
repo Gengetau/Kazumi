@@ -11,6 +11,7 @@ import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/platform/desktop_window_config.dart';
+import 'package:kazumi/pages/syncplay_room/syncplay_room_entry_button.dart';
 import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
 import 'package:kazumi/utils/device.dart';
 
@@ -260,6 +261,8 @@ class _PopularPageState extends State<PopularPage> {
           onPressed: () => context.pushNamed('/search/'),
           icon: const Icon(Icons.search),
         ),
+      // Keep the persistent room reachable after upstream toolbar refactors.
+      const SyncPlayRoomEntryButton(),
       IconButton(
         tooltip: '历史记录',
         onPressed: () => context.pushNamed('/settings/history/'),
