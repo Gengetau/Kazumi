@@ -19,6 +19,7 @@ import 'package:kazumi/pages/player/controller/player_syncplay_binding.dart';
 import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
 import 'package:kazumi/services/player/syncplay_playback_binding.dart';
+import 'package:kazumi/pages/player/controller/player_screenshot_controller.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/shaders/shader_asset_service.dart';
@@ -50,10 +51,7 @@ class PlayerController implements Disposable {
       chatDanmaku.addMessage(message.message, username: message.username);
     });
     _managedRoomPolicyDisposer = reaction(
-      (_) => (
-        syncplay.isManagedRoom,
-        syncplay.playbackParticipation,
-      ),
+      (_) => (syncplay.isManagedRoom, syncplay.playbackParticipation),
       (_) => unawaited(_syncManagedRoomPlaybackPolicy()),
     );
   }
@@ -63,6 +61,7 @@ class PlayerController implements Disposable {
   final AsyncSessionOwner _initializations = AsyncSessionOwner();
   Future<void>? _shutdownFuture;
   final PlayerPanelController panel = PlayerPanelController();
+  final PlayerScreenshotController screenshots = PlayerScreenshotController();
   final PlayerDebugController debug = PlayerDebugController();
 
   late final PlayerDanmakuController danmaku;
@@ -80,11 +79,12 @@ class PlayerController implements Disposable {
   /// A shared app-scoped room session.  PlayerController never disposes it;
   /// it only supplies temporary playback state while this route is active.
   final SyncPlayRoomSessionController syncplay;
-  late final PlayerSyncPlayBinding _syncplayBinding =
-      PlayerSyncPlayBinding(this);
+  late final PlayerSyncPlayBinding _syncplayBinding = PlayerSyncPlayBinding(
+    this,
+  );
   SyncPlayPlaybackAttachment? _syncplayAttachment;
   Future<void> Function(int episode, {int currentRoad, int offset})?
-      _changeEpisodeFromRoom;
+  _changeEpisodeFromRoom;
 
   int get currentBangumiId {
     try {
@@ -119,9 +119,9 @@ class PlayerController implements Disposable {
   );
   late final ExternalPlaybackLauncher externalPlayback =
       ExternalPlaybackLauncher(
-    videoUrl: () => videoUrl,
-    referer: () => referer,
-  );
+        videoUrl: () => videoUrl,
+        referer: () => referer,
+      );
 
   late int bangumiId;
   late int currentEpisode;
@@ -226,7 +226,8 @@ class PlayerController implements Disposable {
     currentBangumiName = params.bangumiName ?? '';
 
     KazumiLogger().i(
-        'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}');
+      'PlayerController: ${params.isLocalPlayback ? "local" : "online"} playback, url: ${params.videoUrl}',
+    );
 
     playback.resetForInit();
     debug.playerLogLevel = GStorage.getSetting(SettingsKeys.playerLogLevel);
@@ -236,8 +237,9 @@ class PlayerController implements Disposable {
     );
 
     playback.buttonSkipTime = GStorage.getSetting(SettingsKeys.buttonSkipTime);
-    playback.arrowKeySkipTime =
-        GStorage.getSetting(SettingsKeys.arrowKeySkipTime);
+    playback.arrowKeySkipTime = GStorage.getSetting(
+      SettingsKeys.arrowKeySkipTime,
+    );
     try {
       await _releasePlaybackResources();
     } catch (_) {}
@@ -259,8 +261,10 @@ class PlayerController implements Disposable {
         return false;
       }
       playback.loading = false;
-      KazumiLogger()
-          .e('PlayerController: failed to initialize video', error: e);
+      KazumiLogger().e(
+        'PlayerController: failed to initialize video',
+        error: e,
+      );
       return false;
     }
     if (player == null || !_ownsInitialization(initialization, player)) {
@@ -293,23 +297,27 @@ class PlayerController implements Disposable {
         return false;
       }
 
-      FlutterVolumeController.addListener((volume) {
-        if (player == null || !_ownsInitialization(initialization, player)) {
-          return;
-        }
-        if (panel.volumeSeeking) {
-          return;
-        }
-        playback.applyExternalVolume(volume * 100);
-        if (!Platform.isAndroid && !panel.volumeSeeking) {
-          panel.showVolume = true;
-          hideVolumeUITimer?.cancel();
-          hideVolumeUITimer = Timer(const Duration(seconds: 1), () {
-            panel.showVolume = false;
-            hideVolumeUITimer = null;
-          });
-        }
-      }, category: AudioSessionCategory.playback, emitOnStart: false);
+      FlutterVolumeController.addListener(
+        (volume) {
+          if (player == null || !_ownsInitialization(initialization, player)) {
+            return;
+          }
+          if (panel.volumeSeeking) {
+            return;
+          }
+          playback.applyExternalVolume(volume * 100);
+          if (!Platform.isAndroid && !panel.volumeSeeking) {
+            panel.showVolume = true;
+            hideVolumeUITimer?.cancel();
+            hideVolumeUITimer = Timer(const Duration(seconds: 1), () {
+              panel.showVolume = false;
+              hideVolumeUITimer = null;
+            });
+          }
+        },
+        category: AudioSessionCategory.playback,
+        emitOnStart: false,
+      );
       if (!_ownsInitialization(initialization, player)) {
         return false;
       }
@@ -332,14 +340,12 @@ class PlayerController implements Disposable {
   }
 
   Future<void> setShader(SuperResolutionMode mode, {Player? player}) async {
-    await playback.setShader(
-      mode,
-      player: player,
-    );
+    await playback.setShader(mode, player: player);
   }
 
   Future<void> setPlaybackSpeed(double playerSpeed) async {
-    final effectiveSpeed = syncplay.isManagedRoom &&
+    final effectiveSpeed =
+        syncplay.isManagedRoom &&
             syncplay.playbackParticipation ==
                 SyncPlayPlaybackParticipation.followingRoom
         ? 1.0
@@ -351,7 +357,8 @@ class PlayerController implements Disposable {
   }
 
   Future<void> _syncManagedRoomPlaybackPolicy() async {
-    final lockToRoom = syncplay.isManagedRoom &&
+    final lockToRoom =
+        syncplay.isManagedRoom &&
         syncplay.playbackParticipation ==
             SyncPlayPlaybackParticipation.followingRoom;
     if (lockToRoom) {
@@ -491,6 +498,7 @@ class PlayerController implements Disposable {
     if (_shutdownFuture != null) {
       return;
     }
+    screenshots.dispose();
     final shutdown = _shutdownResources();
     _shutdownFuture = shutdown;
     unawaited(
@@ -505,9 +513,7 @@ class PlayerController implements Disposable {
   }
 
   Future<void> _shutdownResources() async {
-    await Future.wait([
-      _releasePlaybackResources(),
-    ]);
+    await Future.wait([_releasePlaybackResources()]);
   }
 
   Future<void> _releasePlaybackResources() async {
@@ -538,13 +544,7 @@ class PlayerController implements Disposable {
     await _releasePlaybackResources();
   }
 
-  Future<Uint8List?> screenshot({String format = 'image/jpeg'}) async {
-    return await playback.screenshot(format: format);
-  }
-
-  Future<Uint8List?> screenshotPng() async {
-    return await playback.screenshotPng();
-  }
+  Future<Uint8List?> screenshotPng() => playback.screenshotPng();
 
   void setButtonForwardTime(int time) {
     playback.buttonSkipTime = time;
@@ -561,11 +561,12 @@ class PlayerController implements Disposable {
   }
 
   Future<void> createSyncPlayRoom(
-      String room,
-      String username,
-      Future<void> Function(int episode, {int currentRoad, int offset})
-          changeEpisode,
-      {bool preserveChatHistory = false}) async {
+    String room,
+    String username,
+    Future<void> Function(int episode, {int currentRoad, int offset})
+    changeEpisode, {
+    bool preserveChatHistory = false,
+  }) async {
     _changeEpisodeFromRoom = changeEpisode;
     await syncplay.createRoom(
       room,
@@ -578,7 +579,7 @@ class PlayerController implements Disposable {
     String room,
     String username,
     Future<void> Function(int episode, {int currentRoad, int offset})
-        changeEpisode,
+    changeEpisode,
   ) async {
     _changeEpisodeFromRoom = changeEpisode;
     return syncplay.createManagedRoom(room, username);
@@ -590,10 +591,7 @@ class PlayerController implements Disposable {
     _changeEpisodeFromRoom = callback;
   }
 
-  Future<void> changeEpisodeFromRoom(
-    int episode, {
-    int? preferredRoad,
-  }) async {
+  Future<void> changeEpisodeFromRoom(int episode, {int? preferredRoad}) async {
     final callback = _changeEpisodeFromRoom;
     if (callback == null) {
       return;
@@ -605,16 +603,20 @@ class PlayerController implements Disposable {
     );
   }
 
-  void setSyncPlayCurrentPosition(
-      {bool? forceSyncPlaying, double? forceSyncPosition}) {
+  void setSyncPlayCurrentPosition({
+    bool? forceSyncPlaying,
+    double? forceSyncPosition,
+  }) {
     syncplay.setCurrentPosition(
       forceSyncPlaying: forceSyncPlaying,
       forceSyncPosition: forceSyncPosition,
     );
   }
 
-  Future<void> setSyncPlayPlayingBangumi(
-      {bool? forceSyncPlaying, double? forceSyncPosition}) async {
+  Future<void> setSyncPlayPlayingBangumi({
+    bool? forceSyncPlaying,
+    double? forceSyncPosition,
+  }) async {
     await syncplay.setPlayingBangumi(
       forceSyncPlaying: forceSyncPlaying,
       forceSyncPosition: forceSyncPosition,
@@ -632,11 +634,10 @@ class PlayerController implements Disposable {
   Future<bool> ensureSyncPlayChatReady({
     required Future<void> Function() promptJoin,
     bool forcePrompt = false,
-  }) =>
-      syncplay.ensureSyncPlayChatReady(
-        promptJoin: promptJoin,
-        forcePrompt: forcePrompt,
-      );
+  }) => syncplay.ensureSyncPlayChatReady(
+    promptJoin: promptJoin,
+    forcePrompt: forcePrompt,
+  );
 
   void resetSyncPlayChatEntryPrompt() =>
       syncplay.resetSyncPlayChatEntryPrompt();
@@ -648,9 +649,9 @@ class PlayerController implements Disposable {
   /// Compatibility delegate; room semantics are owned by the shared
   /// app-scoped session rather than this temporary player controller.
   String syncPlayInviteText() => syncplay.syncPlayInviteText(
-        localTitle: currentBangumiName,
-        localBangumiId: currentBangumiId,
-      );
+    localTitle: currentBangumiName,
+    localBangumiId: currentBangumiId,
+  );
 
   Future<void> exitSyncPlayRoom() async {
     await syncplay.exitRoom();

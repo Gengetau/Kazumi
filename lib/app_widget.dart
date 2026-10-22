@@ -8,8 +8,10 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:kazumi/services/logging/logger.dart';
+import 'package:kazumi/services/network/metered_network_service.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
+import 'package:kazumi/bean/dialog/exit_confirmation_dialog.dart';
 import 'package:kazumi/bean/settings/theme_provider.dart';
 import 'package:kazumi/navigation.dart';
 import 'package:kazumi/utils/constants.dart';
@@ -36,6 +38,7 @@ class _AppWidgetState extends State<AppWidget>
       inject<SyncPlayClipboardInviteService>();
   bool showingExitDialog = false;
   bool _showingInvitePrompt = false;
+  bool _isHandlingWindowClose = false;
   bool _didApplyStoredThemeSettings = false;
   Brightness? _lastTitleBarBrightness;
 
@@ -47,9 +50,7 @@ class _AppWidgetState extends State<AppWidget>
     WidgetsBinding.instance.addObserver(this);
     _initializePlatformIntegrations();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(
-        _checkClipboardInvite(SyncPlayClipboardCheckTrigger.startup),
-      );
+      unawaited(_checkClipboardInvite(SyncPlayClipboardCheckTrigger.startup));
     });
   }
 
@@ -125,9 +126,8 @@ class _AppWidgetState extends State<AppWidget>
         return;
       }
     }
-    final acceptedInvite = inviteService.acceptCandidate(
-      confirmUnknownServer: confirmUnknown,
-    )
+    final acceptedInvite =
+        inviteService.acceptCandidate(confirmUnknownServer: confirmUnknown)
         ? inviteService.takePending()
         : null;
     _showingInvitePrompt = false;
@@ -141,8 +141,9 @@ class _AppWidgetState extends State<AppWidget>
       SettingsKeys.syncPlayEndPoint,
       invite.server,
     );
-    var username =
-        GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
+    var username = GStorage.getSetting<String>(
+      SettingsKeys.syncPlayUserName,
+    ).trim();
     if (username.isEmpty) {
       username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
       await GStorage.putSetting<String>(
@@ -274,8 +275,9 @@ class _AppWidgetState extends State<AppWidget>
   void _syncWindowsTitleBarBrightness(ThemeProvider themeProvider) {
     if (!Platform.isWindows) return;
 
-    final brightness =
-        themeProvider.isEffectiveDark() ? Brightness.dark : Brightness.light;
+    final brightness = themeProvider.isEffectiveDark()
+        ? Brightness.dark
+        : Brightness.light;
     if (_lastTitleBarBrightness == brightness) return;
 
     _lastTitleBarBrightness = brightness;
@@ -304,94 +306,58 @@ class _AppWidgetState extends State<AppWidget>
     }
   }
 
-  /// 处理窗口关闭事件，
-  /// 需要使用 `windowManager.close()` 来触发，`exit(0)` 会直接退出程序
+  // windowManager.close() triggers this handler; exit() bypasses confirmation.
   @override
-  void onWindowClose() {
-    final exitBehavior = GStorage.getSetting(SettingsKeys.exitBehavior);
+  Future<void> onWindowClose() async {
+    if (_isHandlingWindowClose || !mounted) return;
+    _isHandlingWindowClose = true;
+    try {
+      var action = switch (GStorage.getSetting(SettingsKeys.exitBehavior)) {
+        0 => ExitDialogAction.exit,
+        1 => ExitDialogAction.minimizeToTray,
+        _ => null,
+      };
+      if (action == null) {
+        final result = await KazumiDialog.show<ExitDialogResult>(
+          builder: (_) => const ExitConfirmationDialog(),
+        );
+        if (result == null || !mounted) return;
 
-    switch (exitBehavior) {
-      case 0:
-        exit(0);
-      case 1:
-        KazumiDialog.dismiss();
-        windowManager.hide();
-        break;
-      default:
-        if (showingExitDialog) return;
-        showingExitDialog = true;
-        KazumiDialog.show(onDismiss: () {
-          showingExitDialog = false;
-        }, builder: (context) {
-          bool saveExitBehavior = false; // 下次不再询问？
+        action = result.action;
+        if (result.rememberChoice) {
+          await GStorage.putSetting(SettingsKeys.exitBehavior, switch (action) {
+            ExitDialogAction.exit => 0,
+            ExitDialogAction.minimizeToTray => 1,
+          });
+        }
+      }
 
-          return AlertDialog(
-            title: const Text('退出确认'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('您想要退出 Kazumi 吗？'),
-                const SizedBox(height: 24),
-                StatefulBuilder(builder: (context, setState) {
-                  onChanged(value) {
-                    saveExitBehavior = value ?? false;
-                    setState(() {});
-                  }
-
-                  return Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    children: [
-                      Checkbox(value: saveExitBehavior, onChanged: onChanged),
-                      const Text('下次不再询问'),
-                    ],
-                  );
-                }),
-              ],
-            ),
-            actions: [
-              TextButton(
-                  onPressed: () async {
-                    if (saveExitBehavior) {
-                      await GStorage.putSetting(SettingsKeys.exitBehavior, 0);
-                    }
-                    exit(0);
-                  },
-                  child: const Text('退出 Kazumi')),
-              TextButton(
-                  onPressed: () async {
-                    if (saveExitBehavior) {
-                      await GStorage.putSetting(SettingsKeys.exitBehavior, 1);
-                    }
-                    KazumiDialog.dismiss();
-                    windowManager.hide();
-                  },
-                  child: const Text('最小化至托盘')),
-              const TextButton(
-                  onPressed: KazumiDialog.dismiss, child: Text('取消')),
-            ],
-          );
-        });
+      if (!mounted) return;
+      switch (action) {
+        case ExitDialogAction.exit:
+          exit(0);
+        case ExitDialogAction.minimizeToTray:
+          await windowManager.hide();
+      }
+    } finally {
+      _isHandlingWindowClose = false;
     }
   }
 
-  /// 处理前后台变更
-  /// windows/linux 在程序后台或失去焦点时只会触发 inactive 不会触发 paused
-  /// android/ios/macos 在程序后台时会先触发 inactive 再触发 paused, 回到前台时会先触发 inactive 再触发 resumed
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
     roomSession.setAppForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.paused) {
-      KazumiLogger()
-          .i("AppLifecycleState.paused: Application moved to background");
-    } else if (state == AppLifecycleState.resumed) {
-      KazumiLogger()
-          .i("AppLifecycleState.resumed: Application moved to foreground");
-      unawaited(
-        _checkClipboardInvite(SyncPlayClipboardCheckTrigger.resume),
+      KazumiLogger().i(
+        "AppLifecycleState.paused: Application moved to background",
       );
+    } else if (state == AppLifecycleState.resumed) {
+      KazumiLogger().i(
+        "AppLifecycleState.resumed: Application moved to foreground",
+      );
+      unawaited(_checkClipboardInvite(SyncPlayClipboardCheckTrigger.resume));
+      await MeteredNetworkService.refresh();
     } else if (state == AppLifecycleState.inactive) {
       KazumiLogger().i("AppLifecycleState.inactive: Application is inactive");
     }
@@ -412,7 +378,8 @@ class _AppWidgetState extends State<AppWidget>
     super.didChangePlatformBrightness();
     final ThemeProvider themeProvider = context.read<ThemeProvider>();
     KazumiLogger().i(
-        "Platform brightness changed, themeMode: ${themeProvider.themeMode}");
+      "Platform brightness changed, themeMode: ${themeProvider.themeMode}",
+    );
 
     _syncWindowsTitleBarBrightness(themeProvider);
   }
@@ -431,11 +398,13 @@ class _AppWidgetState extends State<AppWidget>
       await trayManager.setToolTip('Kazumi');
     }
 
-    Menu trayMenu = Menu(items: [
-      MenuItem(key: 'show_window', label: '显示窗口'),
-      MenuItem.separator(),
-      MenuItem(key: 'exit', label: '退出 Kazumi')
-    ]);
+    Menu trayMenu = Menu(
+      items: [
+        MenuItem(key: 'show_window', label: '显示窗口'),
+        MenuItem.separator(),
+        MenuItem(key: 'exit', label: '退出 Kazumi'),
+      ],
+    );
     await trayManager.setContextMenu(trayMenu);
   }
 
@@ -471,10 +440,16 @@ class _AppWidgetState extends State<AppWidget>
           localizationsDelegates: GlobalMaterialLocalizations.delegates,
           supportedLocales: const [
             Locale.fromSubtags(
-                languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN")
+              languageCode: 'zh',
+              scriptCode: 'Hans',
+              countryCode: "CN",
+            ),
           ],
           locale: const Locale.fromSubtags(
-              languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN"),
+            languageCode: 'zh',
+            scriptCode: 'Hans',
+            countryCode: "CN",
+          ),
           theme: lightTheme,
           darkTheme: effectiveDarkTheme,
           themeMode: themeProvider.themeMode,

@@ -11,7 +11,7 @@ class PlaybackInitParams {
   final int danmakuEpisodeNumber;
   final String pageUrl;
 
-  /// 集数排序号，语义同 EpisodeRef.sortNumber（在线解析自标题、离线为 episodeNumber）。
+  /// Parsed title number online, downloaded episode number offline.
   final int? sortNumber;
   final Map<String, String> httpHeaders;
   final bool adBlockerEnabled;
@@ -107,17 +107,15 @@ bool syncPlayMessageMentionsUsername(String message, String username) {
     return false;
   }
   final pattern = RegExp(
-    r'(^|[\s\(\[\{（【「“‘])@' + RegExp.escape(username) +
+    r'(^|[\s\(\[\{（【「“‘])@' +
+        RegExp.escape(username) +
         r'(?=$|[\s,.!?！？:：;；\)\]\}）】」”’])',
     caseSensitive: false,
   );
   return pattern.hasMatch(message);
 }
 
-enum SyncPlayChatMessageType {
-  user,
-  system,
-}
+enum SyncPlayChatMessageType { user, system }
 
 class SyncPlayChatMessage {
   /// A client-local identifier used for list keys and stable ordering.

@@ -13,7 +13,7 @@ import 'package:kazumi/pages/info/info_controller.dart';
 import 'package:kazumi/pages/info/source_sheet.dart';
 import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
-import 'package:kazumi/pages/player/syncplay_sheet.dart';
+import 'package:kazumi/pages/player/syncplay_room_legacy_ui.dart' as legacy;
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
 import 'package:kazumi/pages/syncplay_room/room_playback_host.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
@@ -138,7 +138,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     if (media.bangumiId <= 0 || media.episode <= 0 || room.isEmpty) {
       return;
     }
-    final sameMedia = _mediaInfoRoom == room &&
+    final sameMedia =
+        _mediaInfoRoom == room &&
         _mediaInfoGeneration == media.generation &&
         (_mediaInfoBangumi?.id == media.bangumiId || _mediaInfoBangumi == null);
     if (!force &&
@@ -161,8 +162,10 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     }
     BangumiItem? bangumi;
     try {
-      bangumi = await (widget.bangumiInfoLoader ??
-          BangumiApi.getBangumiInfoByID)(media.bangumiId);
+      bangumi =
+          await (widget.bangumiInfoLoader ?? BangumiApi.getBangumiInfoByID)(
+            media.bangumiId,
+          );
     } catch (_) {
       bangumi = null;
     }
@@ -223,9 +226,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     );
     if (!mounted) return;
     if (!success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('房间未确认媒体选择，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('房间未确认媒体选择，请重试')));
       return;
     }
     final media = roomSession.currentMedia;
@@ -254,9 +257,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     );
     if (!roomSession.isPlaybackLaunchIntentCurrent(launchIntent)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('房间媒体刚刚更新，请刷新后再进入播放')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('房间媒体刚刚更新，请刷新后再进入播放')));
       }
       return;
     }
@@ -272,7 +275,6 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         context: context,
         maxHeightFactor: 0.85,
         compactLandscapeMaxHeightFactor: 0.95,
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         builder: (sheetContext) => SourceSheet(
           infoController: infoController,
           playbackLaunchIntent: launchIntent,
@@ -289,9 +291,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     }
     if (!mounted || selectedArgs == null) return;
     if (!roomSession.isPlaybackLaunchIntentCurrent(launchIntent)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('房间媒体已经更新，请重新选择播放源')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('房间媒体已经更新，请重新选择播放源')));
       setState(() => _playbackSelectionError = '房间媒体已更新，请重新选择播放源');
       return;
     }
@@ -309,8 +311,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     );
     var username = '';
     try {
-      username =
-          GStorage.getSetting<String>(SettingsKeys.syncPlayUserName).trim();
+      username = GStorage.getSetting<String>(
+        SettingsKeys.syncPlayUserName,
+      ).trim();
     } catch (_) {}
     if (username.isEmpty) {
       username = 'Kazumi${DateTime.now().millisecondsSinceEpoch % 10000}';
@@ -351,8 +354,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         SyncPlayOperatorAuthState.authenticating) {
       return '房主控制 · 正在恢复主持身份';
     }
-    final operatorCount =
-        roomSession.roomUsers.values.where((user) => user.isController).length;
+    final operatorCount = roomSession.roomUsers.values
+        .where((user) => user.isController)
+        .length;
     if (operatorCount == 0) {
       return '房主控制 · 暂无主持人';
     }
@@ -367,7 +371,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       context: context,
       maxHeightFactor: 0.8,
       compactLandscapeMaxHeightFactor: 0.95,
-      builder: (context) => SyncPlayCreateRoomForm(
+      builder: (context) => legacy.SyncPlayCreateRoomForm(
         onSubmit: (room, username, mode) async {
           if (mode == SyncPlayRoomControlMode.managed) {
             await roomSession.createManagedRoom(room, username);
@@ -384,7 +388,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       context: context,
       maxHeightFactor: 0.8,
       compactLandscapeMaxHeightFactor: 0.95,
-      builder: (context) => SyncPlayJoinRoomForm(
+      builder: (context) => legacy.SyncPlayJoinRoomForm(
         onSubmit: (room, username) => roomSession.createRoom(room, username),
       ),
     );
@@ -395,7 +399,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       context: context,
       maxHeightFactor: 0.8,
       compactLandscapeMaxHeightFactor: 0.95,
-      builder: (context) => SyncPlayServerForm(
+      builder: (context) => legacy.SyncPlayServerForm(
         onSaved: roomSession.connectionState == SyncPlayConnectionState.failed
             ? roomSession.retryConnection
             : null,
@@ -413,8 +417,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('邀请信息已复制')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('邀请信息已复制')));
   }
 
   Future<void> _copyOperatorPassword() async {
@@ -426,9 +431,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('主持密码已复制，请仅私下分享给可信成员')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('主持密码已复制，请仅私下分享给可信成员')));
   }
 
   Future<void> _showOperatorAuthentication() async {
@@ -501,9 +506,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(success ? '已成为共同主持人' : '主持密码无效或认证超时'),
-      ),
+      SnackBar(content: Text(success ? '已成为共同主持人' : '主持密码无效或认证超时')),
     );
   }
 
@@ -524,12 +527,15 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   }
 
   Future<void> _confirmExitRoom() async {
-    final operatorCount =
-        roomSession.roomUsers.values.where((user) => user.isController).length;
-    final isUniqueOperator = roomSession.isManagedRoom &&
+    final operatorCount = roomSession.roomUsers.values
+        .where((user) => user.isController)
+        .length;
+    final isUniqueOperator =
+        roomSession.isManagedRoom &&
         roomSession.isRoomOperator &&
         operatorCount <= 1;
-    final isOneOfMultipleOperators = roomSession.isManagedRoom &&
+    final isOneOfMultipleOperators =
+        roomSession.isManagedRoom &&
         roomSession.isRoomOperator &&
         operatorCount > 1;
     final shouldExit = await showDialog<bool>(
@@ -540,8 +546,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           isUniqueOperator
               ? '退出后聊天室不会解散，但其他成员将无法控制共享播放，直到有人使用主持密码重新认证。'
               : isOneOfMultipleOperators
-                  ? '退出后其他主持人仍可继续控制房间。'
-                  : '退出聊天室后将停止同步并清除当前聊天记录。',
+              ? '退出后其他主持人仍可继续控制房间。'
+              : '退出聊天室后将停止同步并清除当前聊天记录。',
         ),
         actions: [
           TextButton(
@@ -573,18 +579,21 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         unawaited(_showServerInfo());
       case _SyncPlayRoomMenuAction.clearHistory:
         roomSession.clearChatHistory();
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('本地聊天记录已清空')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地聊天记录已清空')));
       case _SyncPlayRoomMenuAction.exitRoom:
         unawaited(_confirmExitRoom());
     }
   }
 
   Widget _buildMenu(String room) {
-    final showAuthenticate = roomSession.isManagedRoom &&
+    final showAuthenticate =
+        roomSession.isManagedRoom &&
         !roomSession.isRoomOperator &&
         roomSession.connectionState == SyncPlayConnectionState.connected;
-    final showCopyPassword = roomSession.isRoomOperator &&
+    final showCopyPassword =
+        roomSession.isRoomOperator &&
         (roomSession.operatorPassword?.isNotEmpty ?? false);
     return PopupMenuButton<_SyncPlayRoomMenuAction>(
       tooltip: '房间操作',
@@ -649,8 +658,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
               ),
               const SizedBox(height: 12),
               OutlinedButton(
-                onPressed:
-                    roomSession.canSelectRoomMedia ? _openMediaPicker : null,
+                onPressed: roomSession.canSelectRoomMedia
+                    ? _openMediaPicker
+                    : null,
                 child: Text(
                   roomSession.canSelectRoomMedia ? '选择番剧' : '等待主持人选择',
                 ),
@@ -666,10 +676,10 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     final title = bangumi == null
         ? 'Bangumi #${media.bangumiId}'
         : (bangumi.nameCn.trim().isNotEmpty
-            ? bangumi.nameCn.trim()
-            : (bangumi.name.trim().isNotEmpty
-                ? bangumi.name.trim()
-                : 'Bangumi #${media.bangumiId}'));
+              ? bangumi.nameCn.trim()
+              : (bangumi.name.trim().isNotEmpty
+                    ? bangumi.name.trim()
+                    : 'Bangumi #${media.bangumiId}'));
     final imageUrl = bangumi?.images['large'] ?? '';
     final playbackArgs = _playbackArgs;
     final hasEmbeddedPlayback =
@@ -693,11 +703,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         : SizedBox(
             width: 56,
             height: 76,
-            child: NetworkImgLayer(
-              src: imageUrl,
-              width: 56,
-              height: 76,
-            ),
+            child: NetworkImgLayer(src: imageUrl, width: 56, height: 76),
           );
     return Card(
       child: Padding(
@@ -796,7 +802,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton(
-                    onPressed: _mediaInfoBangumi == null ||
+                    onPressed:
+                        _mediaInfoBangumi == null ||
                             _mediaInfoLoading ||
                             _sourceSheetOpen
                         ? null
@@ -805,8 +812,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
                       _sourceSheetOpen
                           ? '选择中…'
                           : hasEmbeddedPlayback
-                              ? '更换播放源'
-                              : '选择播放源',
+                          ? '更换播放源'
+                          : '选择播放源',
                     ),
                   ),
                 ),
@@ -842,7 +849,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
             fit: FlexFit.loose,
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: SyncPlayRoomHome(
+              child: legacy.SyncPlayRoomHome(
                 controller: roomSession,
                 onCreateRoom: () => unawaited(_showCreateForm()),
                 onJoinRoom: () => unawaited(_showJoinForm()),
@@ -862,7 +869,8 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final sideBySide = constraints.maxWidth >= 800 &&
+        final sideBySide =
+            constraints.maxWidth >= 800 &&
             constraints.maxWidth > constraints.maxHeight;
         final mediaPane = SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -900,8 +908,9 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
             ? roomSession.managedRoomBaseName ?? room
             : room;
         final title = room.isEmpty ? '一起看' : '房间 $displayRoom';
-        final subtitle =
-            room.isEmpty ? label : '$label · ${_roomControlLabel()}';
+        final subtitle = room.isEmpty
+            ? label
+            : '$label · ${_roomControlLabel()}';
         return Scaffold(
           appBar: AppBar(
             title: Column(
