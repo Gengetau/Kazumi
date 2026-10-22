@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
+import 'package:mobx/mobx.dart' as mobx;
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
 import 'package:kazumi/bean/card/network_img_layer.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
@@ -16,6 +17,7 @@ import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/pages/player/syncplay_room_legacy_ui.dart' as legacy;
 import 'package:kazumi/pages/syncplay_room/media_picker/syncplay_room_media_selection.dart';
 import 'package:kazumi/pages/syncplay_room/room_playback_host.dart';
+import 'package:kazumi/pages/syncplay_room/room_playback_layout.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/player/syncplay_endpoint.dart';
@@ -63,6 +65,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
 
   late final Object _chatSurface;
   late final StreamSubscription<SyncPlayRoomMediaEvent> _mediaSubscription;
+  late final mobx.ReactionDisposer _connectionReaction;
   final AsyncSessionOwner _mediaInfoSessions = AsyncSessionOwner();
   BangumiItem? _mediaInfoBangumi;
   String? _mediaInfoRoom;
@@ -72,6 +75,13 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
   OnlineVideoPlaybackArgs? _playbackArgs;
   bool _sourceSheetOpen = false;
   String? _playbackSelectionError;
+  bool _playbackFullscreen = false;
+
+  void _handlePlaybackFullscreen(bool fullscreen) {
+    if (mounted && _playbackFullscreen != fullscreen) {
+      setState(() => _playbackFullscreen = fullscreen);
+    }
+  }
 
   @override
   void initState() {
@@ -79,6 +89,16 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     _chatSurface = roomSession.registerChatSurface();
     roomSession.setChatSurfaceVisible(_chatSurface, true);
     _mediaSubscription = roomSession.mediaEvents.listen(_onMediaEvent);
+    _connectionReaction = mobx.reaction<SyncPlayConnectionState>(
+      (_) => roomSession.connectionState,
+      (state) {
+        if (state != SyncPlayConnectionState.connected &&
+            mounted &&
+            _playbackFullscreen) {
+          setState(() => _playbackFullscreen = false);
+        }
+      },
+    );
     final media = roomSession.currentMedia;
     if (media != null) {
       unawaited(_loadMediaInfo(media));
@@ -111,6 +131,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     rootRouteObserver.unsubscribe(this);
     roomSession.unregisterChatSurface(_chatSurface);
     unawaited(_mediaSubscription.cancel());
+    _connectionReaction();
     _mediaInfoSessions.close();
     super.dispose();
   }
@@ -123,6 +144,7 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
           mounted) {
         setState(() {
           _playbackArgs = null;
+          _playbackFullscreen = false;
           _playbackSelectionError = null;
         });
       }
@@ -643,9 +665,13 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         args: args,
         roomSession: roomSession,
         fillStage: true,
+        onFullscreenChanged: _handlePlaybackFullscreen,
         onClose: () {
           if (!mounted) return;
-          setState(() => _playbackArgs = null);
+          setState(() {
+            _playbackArgs = null;
+            _playbackFullscreen = false;
+          });
         },
       );
     }
@@ -893,63 +919,11 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       );
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final sideBySide =
-            constraints.maxWidth >= 800 &&
-            constraints.maxWidth > constraints.maxHeight;
-        final controls = _buildMediaDetails(context, media);
-        final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-        final controlsHeightLimit = keyboardOpen ? 116.0 : 156.0;
-        final controlsPane = ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: controlsHeightLimit),
-          child: SingleChildScrollView(child: controls),
-        );
-        final stage = _buildPlaybackStage(context, media);
-        if (sideBySide) {
-          return Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: Column(
-                  children: [
-                    Expanded(child: stage),
-                    controlsPane,
-                  ],
-                ),
-              ),
-              const VerticalDivider(width: 1),
-              Expanded(flex: 2, child: chat),
-            ],
-          );
-        }
-        // Reserve the top half of the room for video on ordinary portrait
-        // screens. Smaller windows and the software keyboard sacrifice some
-        // player height so chat + composer stay usable without flex overflow.
-        final maxStageHeight =
-            (constraints.maxHeight -
-                    controlsHeightLimit -
-                    (keyboardOpen ? 166.0 : 146.0))
-                .clamp(0.0, double.infinity);
-        final stageHeight =
-            (constraints.maxHeight * (keyboardOpen ? 0.32 : 0.50)).clamp(
-              0.0,
-              maxStageHeight,
-            );
-        return Column(
-          children: [
-            SizedBox(
-              key: const ValueKey('syncplay-playback-stage'),
-              width: double.infinity,
-              height: stageHeight,
-              child: stage,
-            ),
-            controlsPane,
-            const Divider(height: 1),
-            Expanded(child: chat),
-          ],
-        );
-      },
+    return RoomPlaybackLayout(
+      stage: _buildPlaybackStage(context, media),
+      details: _buildMediaDetails(context, media),
+      chat: chat,
+      fullscreen: _playbackFullscreen,
     );
   }
 
@@ -969,17 +943,22 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
             ? label
             : '$label · ${_roomControlLabel()}';
         return Scaffold(
-          appBar: AppBar(
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title),
-                Text(subtitle, style: Theme.of(context).textTheme.labelSmall),
-              ],
-            ),
-            actions: [_buildMenu(room)],
-          ),
+          appBar: _playbackFullscreen
+              ? null
+              : AppBar(
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title),
+                      Text(
+                        subtitle,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ],
+                  ),
+                  actions: [_buildMenu(room)],
+                ),
           body: _buildBody(context, room: room, state: state, media: media),
         );
       },

@@ -10,11 +10,15 @@ class VideoSystemBars extends StatefulWidget {
     super.key,
     required this.fullscreen,
     required this.isPip,
+    this.hideInLandscape = true,
     required this.child,
   });
 
   final bool fullscreen;
   final bool isPip;
+
+  /// Embedded room playback should not hide system chrome just on rotation.
+  final bool hideInLandscape;
   final Widget child;
 
   @override
@@ -65,10 +69,12 @@ class _VideoSystemBarsState extends State<VideoSystemBars> with RouteAware {
       // PiP keeps the full-window preference until its original metrics return.
       final landscape =
           MediaQuery.orientationOf(context) == Orientation.landscape;
-      unawaited(DisplayModeService.setSystemBarsHidden(
-        owner: this,
-        hidden: widget.fullscreen || landscape,
-      ));
+      unawaited(
+        DisplayModeService.setSystemBarsHidden(
+          owner: this,
+          hidden: widget.fullscreen || (widget.hideInLandscape && landscape),
+        ),
+      );
     }
   }
 

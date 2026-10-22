@@ -46,6 +46,7 @@ class PlayerItem extends StatefulWidget {
     required this.playerController,
     required this.videoPageController,
     required this.fillsWindow,
+    this.allowFullscreenInFilledWindow = false,
     this.onToggleSidePanel,
     required this.changeEpisode,
     required this.onBackPressed,
@@ -57,6 +58,7 @@ class PlayerItem extends StatefulWidget {
   final PlayerController playerController;
   final VideoPageController videoPageController;
   final bool fillsWindow;
+  final bool allowFullscreenInFilledWindow;
   final VoidCallback? onToggleSidePanel;
   final Future<void> Function(int episode, {int currentRoad, int offset})
   changeEpisode;
@@ -1586,6 +1588,8 @@ class _PlayerItemState extends State<PlayerItem>
                           ? const SizedBox.shrink()
                           : PlayerItemPanel(
                               fillsWindow: widget.fillsWindow,
+                              allowFullscreenInFilledWindow:
+                                  widget.allowFullscreenInFilledWindow,
                               playerController: playerController,
                               videoPageController: videoPageController,
                               onBackPressed: widget.onBackPressed,

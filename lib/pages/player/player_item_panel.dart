@@ -39,6 +39,7 @@ class PlayerItemPanel extends StatefulWidget {
     required this.playerController,
     required this.videoPageController,
     required this.fillsWindow,
+    this.allowFullscreenInFilledWindow = false,
     required this.onBackPressed,
     required this.setPlaybackSpeed,
     required this.showDanmakuSwitch,
@@ -66,6 +67,9 @@ class PlayerItemPanel extends StatefulWidget {
   final PlayerController playerController;
   final VideoPageController videoPageController;
   final bool fillsWindow;
+
+  /// Room-embedded playback fills its stage but can still enter fullscreen.
+  final bool allowFullscreenInFilledWindow;
   final VoidCallback onBackPressed;
   final Future<void> Function(double) setPlaybackSpeed;
   final VoidCallback showDanmakuSwitch;
@@ -819,6 +823,7 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
     }
     if (!isDesktop() &&
         widget.fillsWindow &&
+        !widget.allowFullscreenInFilledWindow &&
         !videoPageController.isFullscreen) {
       return const SizedBox.shrink();
     }

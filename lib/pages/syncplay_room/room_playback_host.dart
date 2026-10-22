@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
+import 'package:mobx/mobx.dart' as mobx;
 import 'package:kazumi/pages/download/download_controller.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
@@ -24,6 +25,7 @@ class RoomPlaybackHost extends StatefulWidget {
     required this.roomSession,
     this.onClose,
     this.fillStage = false,
+    this.onFullscreenChanged,
   });
 
   final OnlineVideoPlaybackArgs args;
@@ -32,6 +34,7 @@ class RoomPlaybackHost extends StatefulWidget {
 
   /// Whether the host fills a dedicated room playback stage edge to edge.
   final bool fillStage;
+  final ValueChanged<bool>? onFullscreenChanged;
 
   @override
   State<RoomPlaybackHost> createState() => _RoomPlaybackHostState();
@@ -42,6 +45,7 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
   late final DownloadController _downloadController;
   late final VideoPageController _videoPageController;
   late final PlayerController _playerController;
+  late final mobx.ReactionDisposer _fullscreenReaction;
 
   @override
   void initState() {
@@ -53,6 +57,10 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
       inject<IDownloadRepository>(),
       inject<IDownloadManager>(),
     );
+    _fullscreenReaction = mobx.reaction<bool>(
+      (_) => _videoPageController.isFullscreen,
+      (fullscreen) => widget.onFullscreenChanged?.call(fullscreen),
+    );
     _playerController = PlayerController(
       inject<ShaderAssetService>(),
       _downloadController,
@@ -63,6 +71,7 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
 
   @override
   void dispose() {
+    _fullscreenReaction();
     _playerController.dispose();
     _videoPageController.dispose();
     super.dispose();

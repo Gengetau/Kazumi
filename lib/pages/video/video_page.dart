@@ -140,9 +140,7 @@ class _VideoPageState extends State<VideoPage>
       return;
     }
     _didInitializePlayback = true;
-    if (!widget.embedded) {
-      videoPageController.fullscreen.attach(ModalRoute.of(context)!);
-    }
+    videoPageController.fullscreen.attach(ModalRoute.of(context)!);
     if (isDesktop() && !widget.embedded) {
       unawaited(
         videoPageController.fullscreen.initializeDesktop(
@@ -272,7 +270,7 @@ class _VideoPageState extends State<VideoPage>
         ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
       } catch (_) {}
     }
-    if (!widget.embedded) unawaited(videoPageController.fullscreen.close());
+    unawaited(videoPageController.fullscreen.close());
     keyboardFocus.dispose();
     tabController.dispose();
     TimedShutdownService().cancel();
@@ -479,7 +477,11 @@ class _VideoPageState extends State<VideoPage>
 
   void _onBackPressed() {
     if (widget.embedded) {
-      widget.onEmbeddedClose?.call();
+      if (videoPageController.isFullscreen) {
+        unawaited(videoPageController.fullscreen.setFullscreen(false));
+      } else {
+        widget.onEmbeddedClose?.call();
+      }
     } else {
       unawaited(Navigator.of(context).maybePop());
     }
@@ -498,9 +500,16 @@ class _VideoPageState extends State<VideoPage>
         color: Colors.black,
         child: _buildPlayerBody((fillsWindow: true, hasSidePanel: false)),
       );
-      return widget.expandEmbeddedPlayback
-          ? SizedBox.expand(child: player)
-          : AspectRatio(aspectRatio: 16 / 9, child: player);
+      return Observer(
+        builder: (_) => VideoSystemBars(
+          fullscreen: videoPageController.isFullscreen,
+          isPip: videoPageController.isPip,
+          hideInLandscape: false,
+          child: widget.expandEmbeddedPlayback
+              ? SizedBox.expand(child: player)
+              : AspectRatio(aspectRatio: 16 / 9, child: player),
+        ),
+      );
     }
     return PopScope(
       onPopInvokedWithResult: (bool didPop, Object? result) {
@@ -679,6 +688,7 @@ class _VideoPageState extends State<VideoPage>
               ? const SizedBox.shrink()
               : PlayerItem(
                   fillsWindow: layout.fillsWindow,
+                  allowFullscreenInFilledWindow: widget.embedded,
                   playerController: playerController,
                   videoPageController: videoPageController,
                   onToggleSidePanel: layout.hasSidePanel
