@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/navigation.dart';
+import 'package:kazumi/pages/player/syncplay_chat_panel.dart';
 import 'package:kazumi/modules/roads/road_module.dart';
 import 'package:kazumi/pages/info/info_route_args.dart';
 import 'package:kazumi/pages/syncplay_room/syncplay_room_entry_button.dart';
@@ -165,6 +166,38 @@ void main() {
     await _unmountRoomPage(tester);
     await _disposeWidgetSession(tester, session, client);
   });
+
+  testWidgets(
+    'portrait room reserves its upper half for edge-to-edge playback',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final client = FakeSyncplayClient();
+      final session = _sessionFor(client);
+      await session.createRoom('room-a', 'alice');
+      await _pumpRoomPage(tester, session);
+
+      final stage = find.byKey(const ValueKey('syncplay-playback-stage'));
+      final chat = find.byType(SyncPlayChatView);
+      expect(stage, findsOneWidget);
+      expect(tester.getSize(stage).width, 390);
+      expect(
+        tester.getSize(stage).height,
+        closeTo((844 - kToolbarHeight) / 2, 2),
+      );
+      expect(tester.getTopLeft(stage).dy, closeTo(kToolbarHeight, 2));
+      expect(
+        tester.getTopLeft(chat).dy,
+        greaterThan(tester.getBottomLeft(stage).dy),
+      );
+      expect(find.text('暂未选择番剧'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await _unmountRoomPage(tester);
+      await _disposeWidgetSession(tester, session, client);
+    },
+  );
 
   testWidgets('create form exposes free and host-controlled room modes', (
     WidgetTester tester,

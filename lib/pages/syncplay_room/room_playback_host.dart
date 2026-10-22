@@ -23,11 +23,15 @@ class RoomPlaybackHost extends StatefulWidget {
     required this.args,
     required this.roomSession,
     this.onClose,
+    this.fillStage = false,
   });
 
   final OnlineVideoPlaybackArgs args;
   final SyncPlayRoomSessionController roomSession;
   final VoidCallback? onClose;
+
+  /// Whether the host fills a dedicated room playback stage edge to edge.
+  final bool fillStage;
 
   @override
   State<RoomPlaybackHost> createState() => _RoomPlaybackHostState();
@@ -67,7 +71,9 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: widget.fillStage
+          ? BorderRadius.zero
+          : BorderRadius.circular(16),
       child: VideoPage(
         args: widget.args,
         playerController: _playerController,
@@ -76,6 +82,7 @@ class _RoomPlaybackHostState extends State<RoomPlaybackHost> {
         downloadController: _downloadController,
         roomSession: widget.roomSession,
         embedded: true,
+        expandEmbeddedPlayback: widget.fillStage,
         onEmbeddedClose: widget.onClose,
       ),
     );

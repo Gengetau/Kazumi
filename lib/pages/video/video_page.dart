@@ -48,6 +48,7 @@ class VideoPage extends StatefulWidget {
     required this.downloadController,
     this.roomSession,
     this.embedded = false,
+    this.expandEmbeddedPlayback = false,
     this.onEmbeddedClose,
   });
 
@@ -58,6 +59,10 @@ class VideoPage extends StatefulWidget {
   final DownloadController downloadController;
   final SyncPlayRoomSessionController? roomSession;
   final bool embedded;
+
+  /// Fill the bounds owned by a room's playback stage rather than requesting
+  /// a standalone 16:9 widget height. Video content keeps its own aspect ratio.
+  final bool expandEmbeddedPlayback;
   final VoidCallback? onEmbeddedClose;
 
   @override
@@ -489,13 +494,13 @@ class _VideoPageState extends State<VideoPage>
   @override
   Widget build(BuildContext context) {
     if (widget.embedded) {
-      return AspectRatio(
-        aspectRatio: 16 / 9,
-        child: ColoredBox(
-          color: Colors.black,
-          child: _buildPlayerBody((fillsWindow: true, hasSidePanel: false)),
-        ),
+      final player = ColoredBox(
+        color: Colors.black,
+        child: _buildPlayerBody((fillsWindow: true, hasSidePanel: false)),
       );
+      return widget.expandEmbeddedPlayback
+          ? SizedBox.expand(child: player)
+          : AspectRatio(aspectRatio: 16 / 9, child: player);
     }
     return PopScope(
       onPopInvokedWithResult: (bool didPop, Object? result) {

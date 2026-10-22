@@ -631,42 +631,72 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
     );
   }
 
-  Widget _buildMediaCard(BuildContext context, SyncPlayRoomMedia? media) {
+  /// The upper half of a connected room is reserved for video, not a Card.
+  /// Keep this host mounted independently of the scrollable media controls.
+  Widget _buildPlaybackStage(BuildContext context, SyncPlayRoomMedia? media) {
+    final args = _playbackArgs;
+    if (media != null &&
+        args != null &&
+        args.bangumiItem.id == media.bangumiId) {
+      return RoomPlaybackHost(
+        key: ValueKey('${args.plugin.name}:${args.src}:${args.bangumiItem.id}'),
+        args: args,
+        roomSession: roomSession,
+        fillStage: true,
+        onClose: () {
+          if (!mounted) return;
+          setState(() => _playbackArgs = null);
+        },
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.smart_display_outlined,
+              size: 52,
+              color: Colors.white70,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              media == null ? '暂未选择番剧' : '视频将在这里播放',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: Colors.white),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              media == null ? '选择一部番剧开始一起看' : '请在下方选择播放源',
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Compact controls below the video; never shrink the playback stage.
+  Widget _buildMediaDetails(BuildContext context, SyncPlayRoomMedia? media) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     if (media == null) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('当前观看', style: theme.textTheme.titleMedium),
-              const SizedBox(height: 18),
-              Icon(
-                Icons.movie_outlined,
-                size: 38,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '暂未选择番剧',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                onPressed: roomSession.canSelectRoomMedia
-                    ? _openMediaPicker
-                    : null,
-                child: Text(
-                  roomSession.canSelectRoomMedia ? '选择番剧' : '等待主持人选择',
-                ),
-              ),
-            ],
-          ),
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(
+          children: [
+            Text('当前观看', style: theme.textTheme.titleSmall),
+            const Spacer(),
+            OutlinedButton(
+              onPressed: roomSession.canSelectRoomMedia
+                  ? _openMediaPicker
+                  : null,
+              child: Text(roomSession.canSelectRoomMedia ? '选择番剧' : '等待主持人选择'),
+            ),
+          ],
         ),
       );
     }
@@ -698,129 +728,125 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
       (_, _, _, _, String()) => '播放源需要重新选择',
       _ => '等待选择播放源',
     };
-    final leading = imageUrl.isEmpty
+
+    final cover = imageUrl.isEmpty
         ? CircleAvatar(child: Text('${media.bangumiId}'))
-        : SizedBox(
-            width: 56,
-            height: 76,
-            child: NetworkImgLayer(src: imageUrl, width: 56, height: 76),
-          );
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('当前观看', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Icon(
-                  hasEmbeddedPlayback
-                      ? Icons.play_circle_fill_rounded
-                      : Icons.pending_outlined,
-                  size: 18,
+        : NetworkImgLayer(src: imageUrl, width: 42, height: 50);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text('当前观看', style: theme.textTheme.labelMedium),
+              const Spacer(),
+              Icon(
+                hasEmbeddedPlayback
+                    ? Icons.play_circle_fill_rounded
+                    : Icons.pending_outlined,
+                size: 16,
+                color: hasEmbeddedPlayback
+                    ? colorScheme.primary
+                    : colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                playbackStateLabel,
+                style: theme.textTheme.labelSmall?.copyWith(
                   color: hasEmbeddedPlayback
                       ? colorScheme.primary
                       : colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  playbackStateLabel,
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: hasEmbeddedPlayback
-                        ? colorScheme.primary
-                        : colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (hasEmbeddedPlayback) ...[
-              RoomPlaybackHost(
-                key: ValueKey(
-                  '${playbackArgs.plugin.name}:${playbackArgs.src}:${playbackArgs.bangumiItem.id}',
-                ),
-                args: playbackArgs,
-                roomSession: roomSession,
-                onClose: () {
-                  if (!mounted) return;
-                  setState(() => _playbackArgs = null);
-                },
               ),
-              const SizedBox(height: 10),
             ],
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: leading,
-              title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
-              subtitle: Text('第 ${media.episode} 集\n$selectedBy 选择'),
-            ),
-            if (_mediaInfoLoading)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-            if (_mediaInfoError != null)
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '标题/封面加载失败，仍可使用 Bangumi #${media.bangumiId}',
+          ),
+          const SizedBox(height: 5),
+          Row(
+            children: [
+              SizedBox(width: 42, height: 50, child: cover),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '第 ${media.episode} 集 · $selectedBy 选择',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.error,
+                        color: colorScheme.onSurfaceVariant,
                       ),
                     ),
-                  ),
-                  TextButton(
-                    onPressed: _retryMediaInfo,
-                    child: const Text('重试'),
-                  ),
-                ],
-              ),
-            if (_playbackSelectionError != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  _playbackSelectionError!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.error,
-                  ),
+                  ],
                 ),
               ),
-            const SizedBox(height: 4),
+            ],
+          ),
+          if (_mediaInfoLoading) const LinearProgressIndicator(minHeight: 2),
+          if (_mediaInfoError != null)
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(
-                    onPressed: roomSession.canSelectRoomMedia
-                        ? _openMediaPicker
-                        : null,
-                    child: const Text('更换番剧'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed:
-                        _mediaInfoBangumi == null ||
-                            _mediaInfoLoading ||
-                            _sourceSheetOpen
-                        ? null
-                        : _choosePlaybackSource,
-                    child: Text(
-                      _sourceSheetOpen
-                          ? '选择中…'
-                          : hasEmbeddedPlayback
-                          ? '更换播放源'
-                          : '选择播放源',
+                  child: Text(
+                    '标题/封面加载失败，仍可使用 Bangumi #${media.bangumiId}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
                     ),
                   ),
                 ),
+                TextButton(onPressed: _retryMediaInfo, child: const Text('重试')),
               ],
             ),
-          ],
-        ),
+          if (_playbackSelectionError != null)
+            Text(
+              _playbackSelectionError!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.error,
+              ),
+            ),
+          const SizedBox(height: 7),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: roomSession.canSelectRoomMedia
+                      ? _openMediaPicker
+                      : null,
+                  child: const Text('更换番剧'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed:
+                      _mediaInfoBangumi == null ||
+                          _mediaInfoLoading ||
+                          _sourceSheetOpen
+                      ? null
+                      : _choosePlaybackSource,
+                  child: Text(
+                    _sourceSheetOpen
+                        ? '选择中…'
+                        : hasEmbeddedPlayback
+                        ? '更换播放源'
+                        : '选择播放源',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -872,22 +898,53 @@ class _SyncPlayRoomPageState extends State<SyncPlayRoomPage> with RouteAware {
         final sideBySide =
             constraints.maxWidth >= 800 &&
             constraints.maxWidth > constraints.maxHeight;
-        final mediaPane = SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: _buildMediaCard(context, media),
+        final controls = _buildMediaDetails(context, media);
+        final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+        final controlsHeightLimit = keyboardOpen ? 116.0 : 156.0;
+        final controlsPane = ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: controlsHeightLimit),
+          child: SingleChildScrollView(child: controls),
         );
+        final stage = _buildPlaybackStage(context, media);
         if (sideBySide) {
           return Row(
             children: [
-              Expanded(flex: 3, child: mediaPane),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  children: [
+                    Expanded(child: stage),
+                    controlsPane,
+                  ],
+                ),
+              ),
               const VerticalDivider(width: 1),
               Expanded(flex: 2, child: chat),
             ],
           );
         }
+        // Reserve the top half of the room for video on ordinary portrait
+        // screens. Smaller windows and the software keyboard sacrifice some
+        // player height so chat + composer stay usable without flex overflow.
+        final maxStageHeight =
+            (constraints.maxHeight -
+                    controlsHeightLimit -
+                    (keyboardOpen ? 166.0 : 146.0))
+                .clamp(0.0, double.infinity);
+        final stageHeight =
+            (constraints.maxHeight * (keyboardOpen ? 0.32 : 0.50)).clamp(
+              0.0,
+              maxStageHeight,
+            );
         return Column(
           children: [
-            Flexible(fit: FlexFit.loose, child: mediaPane),
+            SizedBox(
+              key: const ValueKey('syncplay-playback-stage'),
+              width: double.infinity,
+              height: stageHeight,
+              child: stage,
+            ),
+            controlsPane,
             const Divider(height: 1),
             Expanded(child: chat),
           ],
