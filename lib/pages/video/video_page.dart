@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:canvas_danmaku/models/danmaku_content_item.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_modular/flutter_modular.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:mobx/mobx.dart' as mobx;
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
@@ -9,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
 import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
+import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
 import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/bean/widget/media_error_widget.dart';
@@ -18,6 +20,7 @@ import 'package:kazumi/pages/download/download_episode_sheet.dart';
 import 'package:kazumi/pages/history/history_controller.dart';
 import 'package:kazumi/pages/player/episode_comments_sheet.dart';
 import 'package:kazumi/pages/player/player_controller.dart';
+import 'package:kazumi/pages/player/controller/player_models.dart';
 import 'package:kazumi/pages/player/player_item.dart';
 import 'package:kazumi/pages/video/episode_selection_panel.dart';
 import 'package:kazumi/pages/video/player_content_tabs.dart';
@@ -28,6 +31,9 @@ import 'package:kazumi/pages/video/video_side_panel.dart';
 import 'package:kazumi/pages/video/video_system_bars.dart';
 import 'package:kazumi/services/player/pip_utils.dart';
 import 'package:kazumi/services/player/syncplay_room_session_controller.dart';
+import 'package:kazumi/services/player/syncplay_room_models.dart';
+import 'package:kazumi/services/player/syncplay_room_notice.dart';
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
 import 'package:kazumi/services/player/timed_shutdown_service.dart';
 import 'package:kazumi/services/storage/storage.dart';
 import 'package:kazumi/utils/device.dart';
@@ -81,6 +87,9 @@ class _VideoPageState extends State<VideoPage>
   late final bool disableAnimations;
 
   StreamSubscription<SyncPlayChatMessage>? _syncChatSubscription;
+  StreamSubscription<SyncPlayRoomNotice>? _roomNoticeSubscription;
+  StreamSubscription<SyncPlayRoomMediaEvent>? _roomMediaSubscription;
+  bool _roomMismatchDialogShown = false;
   late final mobx.ReactionDisposer _pipModeListener;
   LocalHistoryEntry? _desktopPipEntry;
 
@@ -89,6 +98,21 @@ class _VideoPageState extends State<VideoPage>
   @override
   void initState() {
     super.initState();
+    if (widget.roomSession != null) {
+      playerController.resetSyncPlayChatEntryPrompt();
+      playerController.bindSyncPlayEpisodeChange(_changeEpisodeFromRoom);
+      videoPageController.setPlaybackLaunchIntentValidator(
+        _isPlaybackLaunchIntentCurrent,
+      );
+      if (!widget.embedded) {
+        _roomNoticeSubscription = widget.roomSession!.notices.listen(
+          _handleRoomNotice,
+        );
+        _roomMediaSubscription = widget.roomSession!.mediaEvents.listen(
+          _handleRoomMediaEvent,
+        );
+      }
+    }
     videoPageController.applyPlaybackArgs(widget.args);
     if (!widget.embedded) windowManager.addListener(this);
 
@@ -178,21 +202,22 @@ class _VideoPageState extends State<VideoPage>
   void _initOnlineMode() {
     videoPageController.historyOffset = 0;
 
-    var progress = historyController.lastWatching(
-      videoPageController.bangumiItem,
-      videoPageController.currentPlugin.name,
-    );
-    if (progress != null) {
-      if (videoPageController.roadList.length > progress.road) {
-        if (videoPageController.roadList[progress.road].data.length >=
-            progress.episode) {
-          videoPageController.resetEpisodeState(
-            episode: progress.episode,
-            road: progress.road,
-          );
-          if (playResume) {
-            videoPageController.historyOffset = progress.progress.inSeconds;
-          }
+    // The room's selected episode wins over local viewing history.
+    if (videoPageController.playbackLaunchIntent == null) {
+      final progress = historyController.lastWatching(
+        videoPageController.bangumiItem,
+        videoPageController.currentPlugin.name,
+      );
+      if (progress != null &&
+          videoPageController.roadList.length > progress.road &&
+          videoPageController.roadList[progress.road].data.length >=
+              progress.episode) {
+        videoPageController.resetEpisodeState(
+          episode: progress.episode,
+          road: progress.road,
+        );
+        if (playResume) {
+          videoPageController.historyOffset = progress.progress.inSeconds;
         }
       }
     }
@@ -228,6 +253,8 @@ class _VideoPageState extends State<VideoPage>
     } catch (_) {}
     try {
       _syncChatSubscription?.cancel();
+      _roomNoticeSubscription?.cancel();
+      _roomMediaSubscription?.cancel();
     } catch (_) {}
     try {
       _logSubscription?.cancel();
@@ -268,9 +295,51 @@ class _VideoPageState extends State<VideoPage>
     int currentRoad = 0,
     int offset = 0,
   }) async {
-    if (!mounted || _isExiting) {
-      return;
+    if (!mounted || _isExiting) return;
+    final room = widget.roomSession;
+    if (room != null &&
+        episode != videoPageController.selectedEpisode.episode) {
+      if (!room.canControlLocalPlayback) {
+        KazumiDialog.showToast(message: '当前由主持人控制选集');
+        return;
+      }
+      final shared = room.currentMedia;
+      final bangumiId = playerController.currentBangumiId;
+      final mustSelectThroughRoom =
+          room.connectionState == SyncPlayConnectionState.connected &&
+          room.syncplayRoom.isNotEmpty &&
+          room.playbackParticipation ==
+              SyncPlayPlaybackParticipation.followingRoom &&
+          room.canSelectRoomMedia &&
+          bangumiId > 0 &&
+          (shared == null || shared.bangumiId == bangumiId);
+      if (mustSelectThroughRoom) {
+        final selected = await room.selectRoomMedia(
+          bangumiId: bangumiId,
+          episode: episode,
+          localRoad: currentRoad,
+        );
+        if (!selected && mounted) {
+          KazumiDialog.showToast(message: '切换房间选集失败，请重试');
+        }
+        return;
+      }
     }
+    await _changeEpisodeFromRoom(
+      episode,
+      currentRoad: currentRoad,
+      offset: offset,
+    );
+  }
+
+  // Server-authoritative changes bypass the local operator gate, but still
+  // pass the generation validator inside VideoPageController.
+  Future<void> _changeEpisodeFromRoom(
+    int episode, {
+    int currentRoad = 0,
+    int offset = 0,
+  }) async {
+    if (!mounted || _isExiting) return;
     setState(() {
       webviewLogLines.clear();
       showDebugLog = false;
@@ -281,6 +350,95 @@ class _VideoPageState extends State<VideoPage>
       offset: offset,
       playerController: playerController,
     );
+  }
+
+  bool _isPlaybackLaunchIntentCurrent() {
+    final intent = widget.args.launchIntent;
+    final session = widget.roomSession;
+    return intent == null ||
+        (session != null && session.isPlaybackLaunchIntentCurrent(intent));
+  }
+
+  void _handleRoomMediaEvent(SyncPlayRoomMediaEvent event) {
+    if (!mounted ||
+        event is! SyncPlayRoomMediaMismatch ||
+        _roomMismatchDialogShown)
+      return;
+    _roomMismatchDialogShown = true;
+    unawaited(_showRoomMediaMismatch(event));
+  }
+
+  Future<void> _showRoomMediaMismatch(SyncPlayRoomMediaMismatch event) async {
+    final sameBangumi = event.localBangumiId == event.roomMedia.bangumiId;
+    try {
+      final follow = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            sameBangumi
+                ? '房间已经切换到第 ${event.roomMedia.episode} 集'
+                : '房间已经切换到其他番剧',
+          ),
+          content: Text(
+            sameBangumi
+                ? '是否跟随房间切换到第 ${event.roomMedia.episode} 集？'
+                : '房间当前媒体为 Bangumi #${event.roomMedia.bangumiId}，当前播放器不会自动切换番剧。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('暂不跟随'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(sameBangumi ? '跟随房间' : '返回聊天室'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || follow != true) return;
+      if (sameBangumi) {
+        final latest = widget.roomSession?.currentMedia;
+        if (latest == null ||
+            latest.generation != event.roomMedia.generation ||
+            latest.bangumiId != event.roomMedia.bangumiId ||
+            latest.episode != event.roomMedia.episode)
+          return;
+        await _changeEpisodeFromRoom(latest.episode);
+      } else {
+        await context.pushNamed('/syncplay-room/');
+      }
+    } finally {
+      _roomMismatchDialogShown = false;
+    }
+  }
+
+  void _handleRoomNotice(SyncPlayRoomNotice notice) {
+    if (!mounted) return;
+    switch (notice) {
+      case SyncPlayRoomConnectionFailed(:final message):
+        KazumiDialog.showToast(
+          message: 'SyncPlay: $message',
+          duration: const Duration(seconds: 5),
+          showActionButton: true,
+          actionLabel: '重新连接',
+          onActionPressed: widget.roomSession?.retryConnection,
+        );
+      case SyncPlayRoomReconnecting():
+        KazumiDialog.showToast(message: 'SyncPlay: 同步中断，正在重新连接');
+      case SyncPlayRoomReconnected():
+        KazumiDialog.showToast(message: 'SyncPlay: 已重新连接');
+      case SyncPlayRoomInitialSync(:final username):
+        KazumiDialog.showToast(
+          message: username.isEmpty
+              ? 'SyncPlay: 您是当前房间中的唯一用户'
+              : 'SyncPlay: 当前以用户 $username 进度为准',
+        );
+      case SyncPlayRoomRemoteMediaChanged():
+        break;
+      case SyncPlayRoomRemotePlaybackChanged():
+        break;
+    }
   }
 
   void _revealCurrentEpisode() {
