@@ -74,6 +74,11 @@
           - name: Get Flutter dependencies
             run: flutter pub get
             shell: bash
+          - name: Install native build tools
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y cmake ninja-build g++
+            shell: bash
           - name: Run Flutter tests
             run: flutter test
             shell: bash
@@ -181,6 +186,17 @@
               --dart-define=KAZUMI_APPID=$env:KAZUMI_APPID
               --dart-define=KAZUMI_KEY=$env:KAZUMI_KEY
           - run: Compress-Archive build/windows/x64/runner/Release/* Kazumi_windows_canary.zip
+          - name: Install Inno Setup compiler
+            run: choco install innosetup --no-progress -y
+          - name: Build Windows x64 installer
+            shell: pwsh
+            run: |
+              $revision = (git rev-parse --short HEAD).Trim()
+              $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+              if (-not (Test-Path $compiler)) { throw "Inno Setup compiler not found: $compiler" }
+              & $compiler "/DBuildRevision=$revision" 'windows\installer\kazumi_syncplay.iss'
+              if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
+              Get-ChildItem build\windows\installer\*.exe | Select-Object Name,Length
           - name: Upload windows outputs
             id: unsigned-windows-packet-artifacts
             uses: actions/upload-artifact@v4
@@ -188,6 +204,7 @@
               name: windows_outputs
               path: |
                 Kazumi_windows_*.zip
+                build/windows/installer/Kazumi_SyncPlay_*_Windows_Setup.exe
           # - name: Build unsigned msix
           #   run: dart run msix:create
           # - name: Upload windows msix ouputs
@@ -237,6 +254,8 @@
               channel: stable
               flutter-version-file: pubspec.yaml
           - run: flutter pub get
+          - name: Install native build tools
+            run: brew install cmake ninja
           - name: Build IPA
             run: >-
               flutter build ios --release --no-codesign
@@ -272,6 +291,8 @@
               channel: stable
               flutter-version-file: pubspec.yaml
           - run: flutter pub get
+          - name: Install native build tools
+            run: brew install cmake ninja
           - run: >-
               flutter build macos --release
               --dart-define=DANDANAPI_APPID=$DANDANAPI_APPID

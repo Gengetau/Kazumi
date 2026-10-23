@@ -14,18 +14,17 @@ import 'package:kazumi/services/video_source/services.dart';
 import 'package:kazumi/bean/dialog/dialog_helper.dart';
 import 'package:mobx/mobx.dart';
 import 'package:kazumi/services/logging/logger.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:kazumi/modules/bangumi/episode_item.dart';
 import 'package:kazumi/modules/comments/comment_item.dart';
 import 'package:kazumi/modules/comments/comment_response.dart';
 import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/services/storage/storage.dart';
-import 'package:kazumi/utils/device.dart';
 import 'package:kazumi/utils/episode_url.dart';
 import 'package:kazumi/utils/http_headers.dart';
 import 'package:kazumi/utils/media.dart';
 import 'package:kazumi/utils/async_session.dart';
 import 'package:kazumi/services/platform/display_mode_service.dart';
+import 'package:kazumi/pages/video/video_fullscreen_controller.dart';
 
 part 'video_controller.g.dart';
 
@@ -99,8 +98,11 @@ abstract class _VideoPageController with Store implements Disposable {
   VideoEpisodeSelection get playbackEpisode =>
       playingEpisode ?? selectedEpisode;
 
-  @observable
-  bool isFullscreen = false;
+  final fullscreen = VideoFullscreenController(
+    applyFullscreen: DisplayModeService.applyVideoFullscreen,
+  );
+
+  bool get isFullscreen => fullscreen.isFullscreen;
 
   @observable
   bool isCommentsAscending = false;
@@ -116,9 +118,6 @@ abstract class _VideoPageController with Store implements Disposable {
   bool isPip = false;
 
   @observable
-  bool showTabBody = true;
-
-  @observable
   int historyOffset = 0;
 
   @observable
@@ -128,6 +127,28 @@ abstract class _VideoPageController with Store implements Disposable {
   final Map<int, DownloadEpisode> _offlineEpisodesByNumber = {};
   final Map<int, int> _offlineDisplayRoadToOriginalRoad = {};
   final Map<int, int> _offlineOriginalRoadToDisplayRoad = {};
+
+  SyncPlayPlaybackLaunchIntent? _playbackLaunchIntent;
+  bool _launchIntentPending = false;
+  bool Function()? _playbackLaunchIntentValidator;
+
+  SyncPlayPlaybackLaunchIntent? get playbackLaunchIntent =>
+      _playbackLaunchIntent;
+
+  /// Supplies the app-scoped room check used while a route resolves its
+  /// source.  The callback is installed by VideoPage before it starts any
+  /// asynchronous playback work.
+  void setPlaybackLaunchIntentValidator(bool Function()? validator) {
+    _playbackLaunchIntentValidator = validator;
+  }
+
+  bool get playbackLaunchIntentIsCurrent {
+    if (!_launchIntentPending) {
+      return true;
+    }
+    final validator = _playbackLaunchIntentValidator;
+    return validator == null || validator();
+  }
 
   /// Title reported by the video source; may differ from [bangumiItem]'s.
   String title = '';
@@ -157,6 +178,8 @@ abstract class _VideoPageController with Store implements Disposable {
   /// Applies the route arguments exactly once, from [VideoPage.initState].
   @action
   void applyPlaybackArgs(VideoPlaybackArgs args) {
+    _playbackLaunchIntent = args.launchIntent;
+    _launchIntentPending = args.launchIntent != null;
     switch (args) {
       case OnlineVideoPlaybackArgs():
         bangumiItem = args.bangumiItem;
@@ -165,6 +188,7 @@ abstract class _VideoPageController with Store implements Disposable {
         src = args.src;
         roadList.clear();
         roadList.addAll(args.roads);
+        _applyLaunchEpisode(args.launchIntent);
       case OfflineVideoPlaybackArgs():
         _initForOfflinePlayback(
           bangumiItem: args.bangumiItem,
@@ -174,6 +198,30 @@ abstract class _VideoPageController with Store implements Disposable {
           downloadedEpisodes: args.downloadedEpisodes,
         );
     }
+  }
+
+  void _applyLaunchEpisode(SyncPlayPlaybackLaunchIntent? intent) {
+    if (intent == null ||
+        !intent.isValid ||
+        intent.expectedBangumiId != bangumiItem.id ||
+        intent.expectedEpisode <= 0) {
+      return;
+    }
+    final road = _roadForEpisode(intent.expectedEpisode);
+    if (road == null) {
+      return;
+    }
+    resetEpisodeState(episode: intent.expectedEpisode, road: road);
+  }
+
+  int? _roadForEpisode(int episode) {
+    for (var index = 0; index < roadList.length; index++) {
+      if (episode <= roadList[index].data.length &&
+          episode <= roadList[index].identifier.length) {
+        return index;
+      }
+    }
+    return null;
   }
 
   @action
@@ -422,6 +470,10 @@ abstract class _VideoPageController with Store implements Disposable {
     int offset = 0,
     required PlayerController playerController,
   }) async {
+    if (!playbackLaunchIntentIsCurrent) {
+      _failLoading('房间媒体已更新，请返回聊天室后重试');
+      return;
+    }
     final session = _playbackSessions.begin();
     final selection = VideoEpisodeSelection(
       episode: episode,
@@ -433,7 +485,7 @@ abstract class _VideoPageController with Store implements Disposable {
     _videoSourceService?.cancel();
 
     await playerController.stop();
-    if (session.isStale) {
+    if (session.isStale || !playbackLaunchIntentIsCurrent) {
       return;
     }
 
@@ -530,8 +582,18 @@ abstract class _VideoPageController with Store implements Disposable {
           bangumiItem.nameCn.isNotEmpty ? bangumiItem.nameCn : bangumiItem.name,
     );
 
+    if (!playbackLaunchIntentIsCurrent) {
+      _playbackSessions.cancel();
+      return;
+    }
     final initialized = await playerController.init(params);
+    if (session.isActive && initialized && !playbackLaunchIntentIsCurrent) {
+      playerController.beginShutdown();
+      _playbackSessions.cancel();
+      return;
+    }
     if (session.isActive && initialized) {
+      _launchIntentPending = false;
       playingEpisode = selection;
       unawaited(_loadPlaybackDanmaku(playerController, params, session));
     } else if (session.isActive) {
@@ -613,6 +675,10 @@ abstract class _VideoPageController with Store implements Disposable {
       if (session.isStale) {
         return;
       }
+      if (!playbackLaunchIntentIsCurrent) {
+        _playbackSessions.cancel();
+        return;
+      }
       _finishLoading();
       KazumiLogger()
           .i('VideoPageController: resolved video URL: ${source.url}');
@@ -649,7 +715,13 @@ abstract class _VideoPageController with Store implements Disposable {
       );
 
       final initialized = await playerController.init(params);
+      if (session.isActive && initialized && !playbackLaunchIntentIsCurrent) {
+        playerController.beginShutdown();
+        _playbackSessions.cancel();
+        return;
+      }
       if (session.isActive && initialized) {
+        _launchIntentPending = false;
         playingEpisode = VideoEpisodeSelection(
           episode: resolvedEpisode.listIndex,
           road: resolvedEpisode.roadIndex,
@@ -744,6 +816,7 @@ abstract class _VideoPageController with Store implements Disposable {
   /// Called by Modular when the '/video' route scope is disposed.
   @override
   void dispose() {
+    unawaited(fullscreen.close());
     _playbackSessions.cancel();
     _danmakuSessions.cancel();
     _commentSessions.cancel();
@@ -757,30 +830,6 @@ abstract class _VideoPageController with Store implements Disposable {
     if (videoSourceService != null) {
       unawaited(videoSourceService.dispose());
     }
-  }
-
-  void enterFullScreen() {
-    isFullscreen = true;
-    DisplayModeService.enterFullScreen(lockOrientation: false);
-  }
-
-  void exitFullScreen() {
-    isFullscreen = false;
-    DisplayModeService.exitFullScreen();
-  }
-
-  void isDesktopFullscreen() async {
-    if (isDesktop()) {
-      isFullscreen = await windowManager.isFullScreen();
-    }
-  }
-
-  void handleOnEnterFullScreen() async {
-    isFullscreen = true;
-  }
-
-  void handleOnExitFullScreen() async {
-    isFullscreen = false;
   }
 }
 

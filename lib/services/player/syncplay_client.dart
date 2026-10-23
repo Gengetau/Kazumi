@@ -4,8 +4,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:kazumi/services/player/syncplay_managed_room_models.dart';
+
 const double _pingMovingAverageWeight = 0.85;
 const Duration _tlsHandshakeTimeout = Duration(seconds: 10);
+const Duration _helloTimeout = Duration(seconds: 10);
 const Duration _socketWriteTimeout = Duration(seconds: 10);
 
 class SyncplayException implements Exception {
@@ -22,6 +25,21 @@ class SyncplayConnectionException extends SyncplayException {
 
 class SyncplayProtocolException extends SyncplayException {
   SyncplayProtocolException(super.message);
+}
+
+/// The authoritative identity and room returned by SyncPlay's Hello reply.
+/// The requested username is only a hint; servers can rename it to avoid a
+/// collision, so callers must use this value for local-message comparisons.
+class SyncplayHello {
+  final String username;
+  final String room;
+  final SyncplayServerFeatures features;
+
+  const SyncplayHello({
+    required this.username,
+    required this.room,
+    this.features = const SyncplayServerFeatures(),
+  });
 }
 
 abstract class SyncplayMessage {
@@ -52,10 +70,48 @@ class HelloMessage extends SyncplayMessage {
             'chat': true,
             'featureList': true,
             'readiness': true,
-            'managedRooms': false,
+            'managedRooms': true,
           }
         },
       };
+}
+
+class SyncplayControllerAuthMessage extends SyncplayMessage {
+  final String room;
+  final String password;
+
+  SyncplayControllerAuthMessage({
+    required this.room,
+    required this.password,
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'Set': {
+          'controllerAuth': {
+            'room': room,
+            'password': password,
+          },
+        },
+      };
+}
+
+class SyncplayRoomChangeMessage extends SyncplayMessage {
+  final String room;
+
+  SyncplayRoomChangeMessage(this.room);
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'Set': {
+          'room': {'name': room},
+        },
+      };
+}
+
+class SyncplayListRequestMessage extends SyncplayMessage {
+  @override
+  Map<String, dynamic> toJson() => {'List': null};
 }
 
 class StateMessage extends SyncplayMessage {
@@ -226,6 +282,15 @@ class SyncplayClient {
       StreamController.broadcast();
   StreamController<Map<String, dynamic>>? _positionChangedMessageController =
       StreamController.broadcast();
+  StreamController<SyncplayControlledRoomCreated>?
+      _controlledRoomCreatedController = StreamController.broadcast();
+  StreamController<SyncplayControllerAuthResult>?
+      _controllerAuthResultController = StreamController.broadcast();
+  StreamController<SyncplayUserListSnapshot>? _userListController =
+      StreamController.broadcast();
+  StreamController<String>? _roomChangedController =
+      StreamController.broadcast();
+  Completer<SyncplayHello>? _helloCompleter;
   double? _lastLatencyCalculation;
 
   // Network status
@@ -241,6 +306,7 @@ class SyncplayClient {
   bool get isConnected =>
       !_closed && _socket != null && (_tlsHandshakeCompleter == null || _isTLS);
   String? get username => _username;
+  String? get currentRoom => _currentRoom;
   String? get currentFileName => _currentFileName;
 
   Stream<Map<String, dynamic>> get onGeneralMessage {
@@ -266,6 +332,26 @@ class SyncplayClient {
   Stream<Map<String, dynamic>> get onPositionChangedMessage {
     _positionChangedMessageController ??= StreamController.broadcast();
     return _positionChangedMessageController!.stream;
+  }
+
+  Stream<SyncplayControlledRoomCreated> get onControlledRoomCreated {
+    _controlledRoomCreatedController ??= StreamController.broadcast();
+    return _controlledRoomCreatedController!.stream;
+  }
+
+  Stream<SyncplayControllerAuthResult> get onControllerAuthResult {
+    _controllerAuthResultController ??= StreamController.broadcast();
+    return _controllerAuthResultController!.stream;
+  }
+
+  Stream<SyncplayUserListSnapshot> get onUserListChanged {
+    _userListController ??= StreamController.broadcast();
+    return _userListController!.stream;
+  }
+
+  Stream<String> get onRoomChanged {
+    _roomChangedController ??= StreamController.broadcast();
+    return _roomChangedController!.stream;
   }
 
   SyncplayClient({required String host, required int port})
@@ -348,12 +434,64 @@ class SyncplayClient {
     await _sendMessage(_TLSMessage(message: 'send'));
   }
 
-  Future<void> joinRoom(String room, String username) async {
-    await _sendMessage(HelloMessage(
-      username: username,
-      version: '1.7.0',
-      room: room,
-    ));
+  /// Sends Hello and waits for the server's authoritative reply.
+  ///
+  /// Waiting here prevents callers from treating a socket that has merely
+  /// opened as a joined room, and gives them the username that the server
+  /// actually accepted.
+  Future<SyncplayHello> joinRoom(String room, String username) async {
+    if (_helloCompleter != null) {
+      throw StateError('SyncplayClient.joinRoom may only be called once');
+    }
+    final completer = Completer<SyncplayHello>();
+    _helloCompleter = completer;
+    try {
+      await _sendMessage(HelloMessage(
+        username: username,
+        version: '1.7.0',
+        room: room,
+      ));
+      return await completer.future.timeout(
+        _helloTimeout,
+        onTimeout: () => throw SyncplayConnectionException(
+          'SyncPlay: Hello response timed out',
+        ),
+      );
+    } finally {
+      if (identical(_helloCompleter, completer)) {
+        _helloCompleter = null;
+      }
+    }
+  }
+
+  Future<void> requestControlledRoom(String room, String password) async {
+    if (_currentRoom == null || _username == null) {
+      throw SyncplayProtocolException(
+        'SyncPlay: cannot authenticate a controller before joining a room',
+      );
+    }
+    await _sendMessage(
+      SyncplayControllerAuthMessage(room: room, password: password),
+    );
+  }
+
+  Future<void> changeRoom(String room) async {
+    final target = room.trim();
+    if (_currentRoom == null || _username == null || target.isEmpty) {
+      throw SyncplayProtocolException(
+        'SyncPlay: cannot change room before joining a room',
+      );
+    }
+    await _sendMessage(SyncplayRoomChangeMessage(target));
+  }
+
+  Future<void> requestUserList() async {
+    if (_currentRoom == null || _username == null) {
+      throw SyncplayProtocolException(
+        'SyncPlay: cannot request user list before joining a room',
+      );
+    }
+    await _sendMessage(SyncplayListRequestMessage());
   }
 
   Future<void> sendChatMessage(String message) async {
@@ -402,6 +540,11 @@ class SyncplayClient {
     _closed = true;
     final exception =
         SyncplayConnectionException('SyncPlay: connection closed');
+    final helloCompleter = _helloCompleter;
+    _helloCompleter = null;
+    if (helloCompleter != null && !helloCompleter.isCompleted) {
+      helloCompleter.completeError(exception, StackTrace.current);
+    }
     _completeTLSHandshakeError(exception);
     await _closeSockets(pendingWriteError: exception);
     await _generalMessageController?.close();
@@ -414,6 +557,14 @@ class SyncplayClient {
     _flieChangedMessageController = null;
     await _positionChangedMessageController?.close();
     _positionChangedMessageController = null;
+    await _controlledRoomCreatedController?.close();
+    _controlledRoomCreatedController = null;
+    await _controllerAuthResultController?.close();
+    _controllerAuthResultController = null;
+    await _userListController?.close();
+    _userListController = null;
+    await _roomChangedController?.close();
+    _roomChangedController = null;
     _currentRoom = null;
     _username = null;
     _currentFileName = null;
@@ -606,15 +757,38 @@ class SyncplayClient {
       return;
     }
     if (json.containsKey('Hello')) {
-      if (json['Hello'].containsKey('room') &&
-          json['Hello']['room'].containsKey('name')) {
-        _username = json['Hello']['username'];
-        _currentRoom = json['Hello']['room']['name'];
-        _runInBackground(_setReady());
+      final helloData = json['Hello'];
+      final roomData = helloData is Map ? helloData['room'] : null;
+      final username =
+          helloData is Map ? helloData['username']?.toString() ?? '' : '';
+      final room = roomData is Map ? roomData['name']?.toString() ?? '' : '';
+      if (helloData is! Map || roomData is! Map || room.isEmpty) {
+        final exception = SyncplayProtocolException(
+          'SyncPlay: invalid Hello response',
+        );
+        _helloCompleter?.completeError(exception, StackTrace.current);
+        _helloCompleter = null;
+        _generalMessageController?.addError(exception, StackTrace.current);
+        return;
+      }
+      _username = username;
+      _currentRoom = room;
+      _runInBackground(_setReady());
+      final features = SyncplayServerFeatures.fromJson(helloData['features']);
+      final hello = SyncplayHello(
+        username: username,
+        room: room,
+        features: features,
+      );
+      final helloCompleter = _helloCompleter;
+      _helloCompleter = null;
+      if (helloCompleter != null && !helloCompleter.isCompleted) {
+        helloCompleter.complete(hello);
       }
       _generalMessageController?.add({
-        'username': json['Hello']['username'],
-        'room': json['Hello']['room']['name'],
+        'username': username,
+        'room': room,
+        'features': features,
       });
       return;
     }
@@ -669,24 +843,67 @@ class SyncplayClient {
       return;
     }
     if (json.containsKey('Set')) {
-      if (json['Set'].containsKey('playlistIndex')) {
-        _roomMessageController?.add({
-          'type': 'init',
-          'username': json['Set']['playlistIndex']['user'] ?? '',
-        });
+      final setData = json['Set'];
+      if (setData is! Map) {
+        _generalMessageController?.addError(
+          SyncplayProtocolException('SyncPlay: invalid Set message'),
+        );
         return;
       }
-      if (json['Set'].containsKey('user')) {
-        Map<String, dynamic> userMap = data['Set']['user'];
+      if (setData.containsKey('controllerAuth')) {
+        final result = SyncplayManagedRoomProtocolDecoder.controllerAuth(
+          setData['controllerAuth'],
+        );
+        if (result != null) {
+          _controllerAuthResultController?.add(result);
+        }
+      }
+      if (setData.containsKey('newControlledRoom')) {
+        final created =
+            SyncplayManagedRoomProtocolDecoder.controlledRoomCreated(
+          setData['newControlledRoom'],
+        );
+        if (created != null) {
+          _controlledRoomCreatedController?.add(created);
+        }
+      }
+      if (setData.containsKey('room')) {
+        final room = SyncplayManagedRoomProtocolDecoder.roomChanged(
+          setData['room'],
+        );
+        if (room != null) {
+          _currentRoom = room;
+          _roomChangedController?.add(room);
+        }
+      }
+      if (setData.containsKey('playlistIndex')) {
+        _roomMessageController?.add({
+          'type': 'init',
+          'username': setData['playlistIndex']['user'] ?? '',
+        });
+      }
+      if (setData.containsKey('user') && setData['user'] is Map) {
+        final userMap = Map<String, dynamic>.from(setData['user'] as Map);
         userMap.forEach((username, details) {
-          if (!details.containsKey('event')) {
+          if (details is! Map) {
             return;
           }
-          var event = details['event'].keys.first ?? 'unknown';
-          _roomMessageController?.add({
-            'type': event,
-            'username': username,
-          });
+          final roomData = details['room'];
+          final room =
+              roomData is Map ? roomData['name']?.toString() ?? '' : '';
+          if (username == _username &&
+              room.isNotEmpty &&
+              room != _currentRoom) {
+            _currentRoom = room;
+            _roomChangedController?.add(room);
+          }
+          final eventData = details['event'];
+          if (eventData is Map && eventData.isNotEmpty) {
+            _roomMessageController?.add({
+              'type': eventData.keys.first.toString(),
+              'username': username,
+            });
+          }
         });
         for (var username in userMap.keys) {
           var userData = userMap[username];
@@ -701,6 +918,18 @@ class SyncplayClient {
           }
         }
       }
+      return;
+    }
+    if (json.containsKey('List')) {
+      final snapshot =
+          SyncplayManagedRoomProtocolDecoder.userList(json['List']);
+      if (snapshot == null) {
+        _generalMessageController?.addError(
+          SyncplayProtocolException('SyncPlay: invalid List message'),
+        );
+        return;
+      }
+      _userListController?.add(snapshot);
       return;
     }
     if (json.containsKey('Chat')) {
